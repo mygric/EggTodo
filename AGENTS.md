@@ -21,6 +21,7 @@ MVP 核心链路必须保持可用：
 - `src-tauri/src/commands.rs` 定义前端可调用命令。
 - `src-tauri/src/db.rs` 负责数据库连接、建表和迁移入口。
 - `src-tauri/src/tray.rs` 负责托盘、菜单、面板显隐和定位。
+- Linux 托盘由 `src-tauri/src/tray_ksni.rs` 经 StatusNotifierItem(ksni)实现,因为 tray-icon 的 GTK 后端不转发左键 Activate;ksni 不可用时回退 Tauri 托盘。
 - 不要把托盘、数据库和 command 逻辑重新堆入 `lib.rs`。
 
 ## 编码规范

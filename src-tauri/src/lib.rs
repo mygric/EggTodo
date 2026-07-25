@@ -14,6 +14,8 @@ mod s3_sync;
 mod schedule;
 mod sync;
 mod tray;
+#[cfg(target_os = "linux")]
+mod tray_ksni;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, WindowEvent};

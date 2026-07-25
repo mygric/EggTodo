@@ -145,7 +145,45 @@ fn duration_since(later: Instant, earlier: Instant) -> Duration {
     later.checked_duration_since(earlier).unwrap_or_default()
 }
 
-pub fn create_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
+/// Tray icon backend. Linux prefers a native StatusNotifierItem service
+/// (ksni) because the tray-icon GTK backend never delivers click events;
+/// everything else uses Tauri's tray icon.
+pub enum TrayBackend {
+    Tauri(TrayIcon),
+    #[cfg(target_os = "linux")]
+    Ksni(ksni::blocking::Handle<crate::tray_ksni::LinuxTray>),
+}
+
+/// Backend-neutral tray state: badged icon pixels, tooltip, locale, and the
+/// today-task preview titles shown in the menu.
+#[derive(Clone)]
+pub(crate) struct TraySnapshot {
+    pub locale: AppLocale,
+    pub icon_rgba: Vec<u8>,
+    pub icon_width: u32,
+    pub icon_height: u32,
+    pub tooltip: String,
+    pub today_task_titles: Vec<String>,
+}
+
+pub fn create_tray(app: &AppHandle) -> tauri::Result<TrayBackend> {
+    #[cfg(target_os = "linux")]
+    {
+        match crate::tray_ksni::spawn(app) {
+            Ok(handle) => return Ok(TrayBackend::Ksni(handle)),
+            Err(error) => {
+                eprintln!("ksni tray unavailable, falling back to libappindicator tray: {error}");
+            }
+        }
+    }
+    let backend = TrayBackend::Tauri(create_tauri_tray(app)?);
+    if let Some(snapshot) = tray_snapshot(app) {
+        apply_snapshot(app, &backend, snapshot);
+    }
+    Ok(backend)
+}
+
+fn create_tauri_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let menu = build_tray_menu(app, &[])?;
     let locale = app.state::<I18nState>().locale();
 
@@ -223,7 +261,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
             _ => {}
         })
         .build(app)?;
-    update_task_badge(app);
     Ok(tray)
 }
 
@@ -292,12 +329,39 @@ fn build_tray_menu(app: &AppHandle, today_task_titles: &[String]) -> tauri::Resu
 }
 
 pub(crate) fn update_task_badge(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+    let Some(snapshot) = tray_snapshot(app) else {
         return;
     };
+    let Some(backend) = app.try_state::<TrayBackend>() else {
+        return;
+    };
+    apply_snapshot(app, backend.inner(), snapshot);
+}
+
+fn apply_snapshot(app: &AppHandle, backend: &TrayBackend, snapshot: TraySnapshot) {
+    match backend {
+        TrayBackend::Tauri(tray) => {
+            let _ = tray.set_icon(Some(Image::new_owned(
+                snapshot.icon_rgba.clone(),
+                snapshot.icon_width,
+                snapshot.icon_height,
+            )));
+            let _ = tray.set_tooltip(Some(snapshot.tooltip.clone()));
+            if let Ok(menu) = build_tray_menu(app, &snapshot.today_task_titles) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        TrayBackend::Ksni(handle) => {
+            handle.update(|tray| tray.snapshot = snapshot);
+        }
+    }
+}
+
+pub(crate) fn tray_snapshot(app: &AppHandle) -> Option<TraySnapshot> {
     let database = app.state::<Database>();
     let Ok(connection) = database.connection.lock() else {
-        return;
+        return None;
     };
     let counts = connection.query_row(
         "
@@ -327,17 +391,14 @@ pub(crate) fn update_task_badge(app: &AppHandle) {
         },
     );
     let Ok((remaining, total, today_due)) = counts else {
-        return;
+        return None;
     };
     let today_task_titles =
         today_task_titles(&connection, TODAY_TASK_MENU_LIMIT).unwrap_or_default();
     drop(connection);
 
-    let Some(base) = app.default_window_icon() else {
-        return;
-    };
+    let base = app.default_window_icon()?;
     let badge = draw_task_badge(base, remaining, total);
-    let _ = tray.set_icon(Some(badge));
     let i18n_state = app.state::<I18nState>();
     let locale = i18n_state.locale();
     let tooltip = match i18n_state.focus_tooltip() {
@@ -349,9 +410,33 @@ pub(crate) fn update_task_badge(app: &AppHandle) {
         ),
         None => locale.task_tooltip(remaining, total, today_due),
     };
-    let _ = tray.set_tooltip(Some(tooltip));
-    if let Ok(menu) = build_tray_menu(app, &today_task_titles) {
-        let _ = tray.set_menu(Some(menu));
+    Some(TraySnapshot {
+        locale,
+        icon_width: badge.width(),
+        icon_height: badge.height(),
+        icon_rgba: badge.rgba().to_vec(),
+        tooltip,
+        today_task_titles,
+    })
+}
+
+/// Snapshot without database access, used when the ksni service starts before
+/// the first badge refresh.
+#[cfg(target_os = "linux")]
+pub(crate) fn base_snapshot(app: &AppHandle) -> TraySnapshot {
+    let i18n_state = app.state::<I18nState>();
+    let locale = i18n_state.locale();
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("EggDone application icon is missing");
+    TraySnapshot {
+        locale,
+        icon_width: icon.width(),
+        icon_height: icon.height(),
+        icon_rgba: icon.rgba().to_vec(),
+        tooltip: locale.app_title().to_string(),
+        today_task_titles: Vec::new(),
     }
 }
 
@@ -361,9 +446,6 @@ pub(crate) fn update_focus_tooltip(
     remaining_ms: u64,
     title: Option<&str>,
 ) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else {
-        return;
-    };
     let i18n_state = app.state::<I18nState>();
     i18n_state.set_focus_tooltip(FocusTooltipSnapshot {
         phase: phase.to_string(),
@@ -371,7 +453,18 @@ pub(crate) fn update_focus_tooltip(
         title: title.map(str::to_string),
     });
     let tooltip = focus_tooltip(i18n_state.locale(), phase, remaining_ms, title);
-    let _ = tray.set_tooltip(Some(tooltip));
+    let Some(backend) = app.try_state::<TrayBackend>() else {
+        return;
+    };
+    match backend.inner() {
+        TrayBackend::Tauri(tray) => {
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+        #[cfg(target_os = "linux")]
+        TrayBackend::Ksni(handle) => {
+            handle.update(|tray| tray.snapshot.tooltip = tooltip.clone());
+        }
+    }
 }
 
 fn focus_tooltip(locale: AppLocale, phase: &str, remaining_ms: u64, title: Option<&str>) -> String {
@@ -421,7 +514,7 @@ fn today_task_titles(
     rows.collect()
 }
 
-fn today_task_menu_label(index: usize, title: &str) -> String {
+pub(crate) fn today_task_menu_label(index: usize, title: &str) -> String {
     format!(
         "{}. {}",
         index + 1,
