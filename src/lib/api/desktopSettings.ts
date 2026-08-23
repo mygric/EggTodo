@@ -17,6 +17,8 @@ export const shortcutOptions = [
   { value: "CommandOrControl+Alt+Space", label: "Ctrl + Alt + Space" },
   { value: "Alt+Shift+Space", label: "Alt + Shift + Space" },
   { value: "CommandOrControl+Shift+E", label: "Ctrl + Shift + E" },
+ { value: "CommandOrControl+1", label: "Ctrl + 1" }, 
+ { value: "CommandOrControl+0", label: "Ctrl + 0" }, 
 ] as const;
 
 export interface DesktopSettings {

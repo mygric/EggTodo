@@ -1,3 +1,7 @@
+html {
+  zoom: 120%;
+}
+
 :root {
   font-family:
     "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
@@ -2016,7 +2020,7 @@ footer {
 .todo-item {
   gap: 9px;
   margin-bottom: 8px;
-  padding: 11px 8px 11px 10px;
+  padding: 8px 8px 8px 10px;
   border: 1px solid #f0e9dc;
   border-radius: 14px;
   background: rgb(255 255 255 / 75%);
@@ -5457,4 +5461,21 @@ html[data-theme="dark"] .note-card > .note-color-picker {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.pin-window-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  color: #a89c89;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: grid;           /* 加上 */
+  place-items: center;     /* 加上 */
+}
+
+.pin-window-button.active {
+  color: #f6c94c;
+  background: #f6c94c22;
 }

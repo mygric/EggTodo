@@ -58,6 +58,7 @@ export const zhCN = {
   "nav.search": "搜索",
   "nav.settings": "设置",
   "nav.today": "今天",
+"nav.tomorrow": "明天",
   "todo.add": "新增任务",
   "todo.addNote": "添加备注",
   "todo.archive": "归档",

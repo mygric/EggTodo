@@ -1,7 +1,7 @@
 import type { Todo } from "$lib/types";
 import { isDueTodayOrOverdue } from "./todoDates";
 
-export type TodoListView = "all" | "today" | "tomorrow" | "quadrants" | "calendar";
+export type TodoListView = "all" | "today" | "quadrants" | "calendar";
 
 export interface TodoFilterOptions {
   view?: TodoListView;
@@ -26,15 +26,6 @@ export function filterTodos(
       return false;
     }
     if (view === "today" && !isDueTodayOrOverdue(todo, now)) return false;
-    // 👇 明天筛选逻辑
-    if (view === "tomorrow") {
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split("T")[0];
-      const dueDate = todo.due_date ?? (todo.due_at ? new Date(todo.due_at).toISOString().split("T")[0] : null);
-      if (dueDate !== tomorrowStr) return false;
-    }
-    // 👆 明天筛选结束
     if (!showCompleted && todo.completed) return false;
     if (!normalizedQuery) return true;
     return todo.title.toLocaleLowerCase().includes(normalizedQuery);

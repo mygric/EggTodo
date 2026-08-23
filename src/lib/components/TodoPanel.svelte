@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { flip } from "svelte/animate";
@@ -96,6 +97,18 @@
     { value: "lavender", label: $translator("group.colorLavender") },
     { value: "gray", label: $translator("group.colorGray") },
   ];
+
+let windowAlwaysOnTop = false;
+
+async function toggleWindowOnTop() {
+  try {
+    const result = await invoke('toggle_always_on_top');
+    windowAlwaysOnTop = result;
+    console.log("置顶状态:", result);
+  } catch (error) {
+    console.error("置顶失败:", error);
+  }
+}
 
   let quadrantDefinitions: Array<{
     key: QuadrantKey;
@@ -2105,6 +2118,21 @@
         {/if}
       </button>
 
+      <!-- 置顶按钮 -->
+      <button
+        class="pin-window-button"
+        class:active={windowAlwaysOnTop}
+        type="button"
+        aria-label={windowAlwaysOnTop ? "取消置顶" : "窗口置顶"}
+        title={windowAlwaysOnTop ? "取消置顶" : "窗口置顶"}
+        onclick={toggleWindowOnTop}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 17V3M10 3L4 9M10 3L16 9" />
+          <line x1="4" y1="17" x2="16" y2="17" />
+        </svg>
+      </button>
+
       <button class="close-button" type="button" aria-label={$translator("common.hidePanel")} title={$translator("common.hidePanel")} onclick={() => todoApi.hidePanel()}>
         <svg viewBox="0 0 20 20" aria-hidden="true">
           <path d="m5 5 10 10m0-10L5 15" />
@@ -2416,6 +2444,14 @@
       >
         {$translator("nav.today")}{todayCount > 0 ? ` ${todayCount}` : ""}
       </button>
+  <button
+    class:active={listView === "tomorrow"}
+    type="button"
+    aria-pressed={listView === "tomorrow"}
+    onclick={() => setListView("tomorrow")}
+  >
+    {$translator("nav.tomorrow")}
+  </button>
       <button
         class:active={listView === "quadrants"}
         type="button"
