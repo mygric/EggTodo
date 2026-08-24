@@ -171,6 +171,7 @@ async function toggleWindowOnTop() {
   let focusDisplayTime = "25:00";
   let focusDisplayHint = "";
   let focusDisplayPhase = "";
+let sortByDate = false;
   let focusIllustrationSrc = "/focus-illustration.png";
   let focusTarget: FocusTarget | null = getFocusTarget();
   let completingFocusTarget = false;
@@ -273,7 +274,53 @@ async function toggleWindowOnTop() {
     view: listView === "notes" ? "all" : listView,
     groupUuid: activeGroupUuid,
   });
-  $: renderedTodos = applyPreviewOrder(filteredTodos, previewOrderIds);
+$: sortedTodos = [...filteredTodos].sort((a, b) => {
+  if (a.completed !== b.completed) {
+    return a.completed ? 1 : -1;
+  }
+  const getTime = (todo) => {
+    if (todo.due_at !== null) return todo.due_at;
+    if (todo.due_date !== null) {
+      return new Date(todo.due_date + 'T00:00:00').getTime();
+    }
+    return null;
+  };
+  const timeA = getTime(a);
+  const timeB = getTime(b);
+  if (timeA === null && timeB === null) return 0;
+  if (timeA === null) return 1;
+  if (timeB === null) return -1;
+  return timeA - timeB;
+});
+
+$: renderedTodos = applyPreviewOrder(sortedTodos, previewOrderIds);
+$: renderedTodos = (() => {
+  const base = applyPreviewOrder(filteredTodos, previewOrderIds);
+  if (!sortByDate) return base;
+  return [...base].sort((a, b) => {
+    // 未完成的排前面，已完成的排后面
+    if (a.completed !== b.completed) {
+      return a.completed ? 1 : -1;
+    }
+    
+    // 获取排序时间：优先用 due_at（精确到分钟），其次用 due_date
+    const getTime = (todo) => {
+      if (todo.due_at !== null) return todo.due_at;  // 毫秒时间戳，精确到分钟
+      if (todo.due_date !== null) {
+        return new Date(todo.due_date + 'T00:00:00').getTime();
+      }
+      return null;
+    };
+    
+    const timeA = getTime(a);
+    const timeB = getTime(b);
+    
+    if (timeA === null && timeB === null) return 0;
+    if (timeA === null) return 1;
+    if (timeB === null) return -1;
+    return timeA - timeB;  // 按时间戳排序，精确到毫秒
+  });
+})();
   $: batchSelectedTodos = renderedTodos.filter((todo) =>
     batchSelectedIds.has(todo.id),
   );
@@ -2510,6 +2557,13 @@ async function toggleWindowOnTop() {
               {showCompleted ? $translator("todo.hideCompleted") : $translator("todo.showCompleted")}
             </button>
           {/if}
+<button
+  type="button"
+  role="menuitem"
+  onclick={() => sortByDate = !sortByDate}
+>
+  {sortByDate ? '✅' : '⬜'} 按时间排序
+</button>
           {#if listView !== "notes" && $completedCount > 0}
             <button
               type="button"
