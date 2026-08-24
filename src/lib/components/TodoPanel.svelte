@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
   import { flip } from "svelte/animate";
   import { onMount, tick } from "svelte";
   import packageMetadata from "../../../package.json";
-
+import { getDefaultTaskView } from "$lib/api/desktopSettings";
   import { languageState, translator } from "$lib/i18n";
   import { localizedErrorMessage } from "$lib/i18n/errors";
   import { todoApi } from "$lib/api/todoApi";
@@ -302,22 +302,27 @@ $: renderedTodos = (() => {
       return a.completed ? 1 : -1;
     }
     
-    // 获取排序时间：优先用 due_at（精确到分钟），其次用 due_date
-    const getTime = (todo) => {
-      if (todo.due_at !== null) return todo.due_at;  // 毫秒时间戳，精确到分钟
-      if (todo.due_date !== null) {
-        return new Date(todo.due_date + 'T00:00:00').getTime();
-      }
-      return null;
-    };
+    // ✅ 未完成：按到期时间排序（从早到晚）
+    if (!a.completed) {
+      const getTime = (todo) => {
+        if (todo.due_at !== null) return todo.due_at;
+        if (todo.due_date !== null) {
+          return new Date(todo.due_date + 'T00:00:00').getTime();
+        }
+        return null;
+      };
+      const timeA = getTime(a);
+      const timeB = getTime(b);
+      if (timeA === null && timeB === null) return 0;
+      if (timeA === null) return 1;
+      if (timeB === null) return -1;
+      return timeA - timeB;
+    }
     
-    const timeA = getTime(a);
-    const timeB = getTime(b);
-    
-    if (timeA === null && timeB === null) return 0;
-    if (timeA === null) return 1;
-    if (timeB === null) return -1;
-    return timeA - timeB;  // 按时间戳排序，精确到毫秒
+    // ✅ 已完成：按完成时间排序（最近完成的在上面）
+    const timeA = a.completed_at ?? 0;
+    const timeB = b.completed_at ?? 0;
+    return timeB - timeA;
   });
 })();
   $: batchSelectedTodos = renderedTodos.filter((todo) =>
@@ -1288,36 +1293,51 @@ $: renderedTodos = (() => {
       .catch(() => {});
   }
 
-  async function addTodo() {
-    const nextTitle = title.trim();
-    if (!nextTitle || adding) return;
-    const parsed = quickAddPreview ?? {
-      title: nextTitle,
-      schedule: null,
-      label: "",
-      groupName: null,
-      priority: 0,
-    };
-    const groupUuid = groupUuidByName(parsed.groupName) ?? newTodoGroupUuid();
+ async function addTodo() {
+  const nextTitle = title.trim();
+  if (!nextTitle || adding) return;
+  const parsed = quickAddPreview ?? {
+    title: nextTitle,
+    schedule: null,
+    label: "",
+    groupName: null,
+    priority: 0,
+  };
+  const groupUuid = groupUuidByName(parsed.groupName) ?? newTodoGroupUuid();
 
-    adding = true;
-    try {
-      const created = await todos.add(parsed.title, groupUuid);
-      if (parsed.schedule) {
-        await todos.setSchedule(created.id, parsed.schedule);
-      }
-      if (parsed.priority === 1) {
-        await todos.setPriority(created, 1);
-      }
-      title = "";
-      quickAddParsingDisabledFor = "";
-    } catch (error) {
-      todos.reportError(error);
-    } finally {
-      adding = false;
-      inputElement?.focus();
+  adding = true;
+  try {
+    const created = await todos.add(parsed.title, groupUuid);
+    
+    // ⭐ 如果设置了默认添加到"今天"，自动设置到期时间为今天 21:00
+    const defaultView = await getDefaultTaskView();
+    if (defaultView === "today") {
+      const today = new Date();
+      today.setHours(21, 0, 0, 0);
+      const dueAt = today.getTime();
+      await todos.setSchedule(created.id, {
+        due_date: null,
+        due_at: dueAt,
+        reminder_at: null,
+        repeat_rule: null,
+      });
     }
+    
+    if (parsed.schedule) {
+      await todos.setSchedule(created.id, parsed.schedule);
+    }
+    if (parsed.priority === 1) {
+      await todos.setPriority(created, 1);
+    }
+    title = "";
+    quickAddParsingDisabledFor = "";
+  } catch (error) {
+    todos.reportError(error);
+  } finally {
+    adding = false;
+    inputElement?.focus();
   }
+}
 
   async function toggleTodo(todo: Todo) {
     try {
