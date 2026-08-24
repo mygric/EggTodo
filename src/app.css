@@ -5476,6 +5476,62 @@ html[data-theme="dark"] .note-card > .note-color-picker {
 }
 
 .pin-window-button.active {
+
   color: #f6c94c;
   background: #f6c94c22;
+}
+
+.settings-card {
+  max-height: 80vh !important;
+  overflow-y: auto !important;
+}	
+
+.panel-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.todo-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+footer {
+  flex-shrink: 0;
+}
+
+.divider-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 8px;
+  width: 100%;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;   /* 👈 新增 */
+  border: none;              /* 👈 新增 */
+  padding: 4px 0;            /* 👈 新增 */
+  font: inherit;             /* 👈 新增 */
+}
+
+.divider-container:hover .divider-label {
+  color: #705f47;
+}
+
+.divider-line {
+  flex: 1;
+  height: 1px;
+  background: #e0d5c5;
+}
+
+.divider-label {
+  flex-shrink: 0;
+  color: #a99c88;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s;
 }

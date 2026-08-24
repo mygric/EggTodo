@@ -13,11 +13,12 @@ const SHORTCUT_KEY = "eggdone-global-shortcut";
 const SHORTCUT_ENABLED_KEY = "eggdone-global-shortcut-enabled";
 
 export const shortcutOptions = [
+ { value: "CommandOrControl+1", label: "Ctrl + 1" }, 
   { value: "CommandOrControl+Shift+Space", label: "Ctrl + Shift + Space" },
   { value: "CommandOrControl+Alt+Space", label: "Ctrl + Alt + Space" },
   { value: "Alt+Shift+Space", label: "Alt + Shift + Space" },
   { value: "CommandOrControl+Shift+E", label: "Ctrl + Shift + E" },
- { value: "CommandOrControl+1", label: "Ctrl + 1" }, 
+
  { value: "CommandOrControl+0", label: "Ctrl + 0" }, 
 ] as const;
 
@@ -34,8 +35,7 @@ let activeShortcut: string | null = null;
 export async function initializeDesktopSettings(): Promise<DesktopSettings> {
   const shortcut =
     localStorage.getItem(SHORTCUT_KEY) ?? shortcutOptions[0].value;
-  const shortcutEnabled =
-    localStorage.getItem(SHORTCUT_ENABLED_KEY) !== "false";
+const shortcutEnabled = true;
   let shortcutError: string | null = null;
   let autostartEnabled = false;
   let autostartError: string | null = null;
@@ -119,4 +119,21 @@ function shortcutErrorMessage(error: unknown) {
 function settingErrorMessage(message: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
   return `${message}：${detail}`;
+}
+
+// ============================================
+// ⭐ 新增：新任务默认视图设置
+// ============================================
+const DEFAULT_TASK_VIEW_KEY = "eggdone-default-task-view";
+
+export async function getDefaultTaskView(): Promise<"all" | "today"> {
+  const saved = localStorage.getItem(DEFAULT_TASK_VIEW_KEY);
+  if (saved === "today" || saved === "all") {
+    return saved;
+  }
+  return "today"; // 默认今天
+}
+
+export async function setDefaultTaskView(view: "all" | "today"): Promise<void> {
+  localStorage.setItem(DEFAULT_TASK_VIEW_KEY, view);
 }

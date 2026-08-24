@@ -23,6 +23,7 @@
   import type { DefaultListViewMode } from "$lib/utils/viewPreferences";
   import { onMount } from "svelte";
   import SyncSettings from "./SyncSettings.svelte";
+  import packageMetadata from "../../../package.json";
 
   export let settings: DesktopSettings;
   export let defaultListViewMode: DefaultListViewMode;
@@ -105,9 +106,18 @@
     breakDurationMinutes = saveBreakDurationMinutes(minutes);
   }
 
-  function selectLanguage(mode: LanguageMode) {
-    setLanguageMode(mode);
-  }
+function selectLanguage(mode: LanguageMode) {
+  setLanguageMode(mode);
+}
+
+// ⭐ 新任务默认视图
+import { getDefaultTaskView, setDefaultTaskView } from "$lib/api/desktopSettings";
+
+let defaultTaskView: "all" | "today" = "today";
+
+onMount(async () => {
+  defaultTaskView = await getDefaultTaskView();
+});
 </script>
 
 <svelte:window
@@ -218,6 +228,17 @@
       </select>
     </label>
 
+<label class="preference-select">
+  <span>新任务默认添加到</span>
+  <select
+    bind:value={defaultTaskView}
+    onchange={() => void setDefaultTaskView(defaultTaskView)}
+  >
+    <option value="all">全部</option>
+    <option value="today">今天</option>
+  </select>
+</label>
+
     <section class="focus-settings-section" aria-labelledby="focus-settings-title">
       <div class="setting-row focus-settings-heading">
         <div>
@@ -258,6 +279,12 @@
     </section>
 
     <SyncSettings />
+
+    <!-- 👇 在这里插入 -->
+    <div class="settings-footer">
+      <p>蛋定 Todo v{packageMetadata.version}</p>
+      <span>基于 MIT 协议开源</span>
+    </div>
 
     {#if error}<p class="settings-error" role="alert">{error}</p>{/if}
   </section>

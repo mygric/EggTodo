@@ -33,7 +33,8 @@ export function formatDueLabel(todo: Todo, now = new Date()) {
 }
 
 export function getDueTone(todo: Todo, now = new Date()): DueTone {
-  if (todo.completed) return "";
+  // ⭐ 注释掉：让已完成任务也能有 due tone
+  // if (todo.completed) return "";
 
   const today = localDateString(0, now);
   if (todo.due_date) {
@@ -51,7 +52,8 @@ export function getDueTone(todo: Todo, now = new Date()): DueTone {
 }
 
 export function isDueTodayOrOverdue(todo: Todo, now = new Date()) {
-  if (todo.completed) return false;
+  // ⭐ 注释掉：让已完成任务也能被计入今天/逾期
+  // if (todo.completed) return false;
   return getDueTone(todo, now) === "today" || getDueTone(todo, now) === "overdue";
 }
 
