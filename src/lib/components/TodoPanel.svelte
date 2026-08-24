@@ -243,7 +243,7 @@ let sortByDate = true;
   let batchMoveTarget = "";
   $: searchActive = searchQuery.trim().length > 0;
   $: reorderDisabled = searchActive || listView !== "all";
-  $: todayCount = $todos.items.filter((todo) => isDueTodayOrOverdue(todo)).length;
+  $: todayCount = $todos.items.filter((todo) => isDueTodayOrOverdue(todo) && !todo.completed).length;
   $: activeGroupUuid = groupFilterValue(selectedGroup);
   $: selectedGroupObject = $todos.groups.find(
     (group) => group.uuid === selectedGroup,
@@ -2544,7 +2544,17 @@ $: renderedTodos = (() => {
       </button>
     </div>
     <div bind:this={summaryActionsElement} class="summary-actions">
-      <span class="count">{listView === "notes" ? $translator("note.count", { count: $notes.items.length }) : $translator("todo.incompleteCount", { count: $remainingCount })}</span>
+<span class="count">
+  {#if listView === "notes"}
+    {$translator("note.count", { count: $notes.items.length })}
+  {:else if listView === "today"}
+    {$translator("todo.incompleteCount", { count: renderedTodos.filter(t => !t.completed).length })}
+  {:else if listView === "tomorrow"}
+    {$translator("todo.incompleteCount", { count: renderedTodos.filter(t => !t.completed).length })}
+  {:else}
+    {$translator("todo.incompleteCount", { count: $remainingCount })}
+  {/if}
+</span>
       <button
         class:active={summaryMenuOpen || showSearch || batchMode}
         class="summary-menu-button"
