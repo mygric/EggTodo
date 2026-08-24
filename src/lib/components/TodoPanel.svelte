@@ -171,7 +171,7 @@ async function toggleWindowOnTop() {
   let focusDisplayTime = "25:00";
   let focusDisplayHint = "";
   let focusDisplayPhase = "";
-let sortByDate = false;
+let sortByDate = true;
   let focusIllustrationSrc = "/focus-illustration.png";
   let focusTarget: FocusTarget | null = getFocusTarget();
   let completingFocusTarget = false;
