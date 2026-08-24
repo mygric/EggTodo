@@ -293,7 +293,6 @@ $: sortedTodos = [...filteredTodos].sort((a, b) => {
   return timeA - timeB;
 });
 
-$: renderedTodos = applyPreviewOrder(sortedTodos, previewOrderIds);
 $: renderedTodos = (() => {
   const base = applyPreviewOrder(filteredTodos, previewOrderIds);
   if (!sortByDate) return base;
