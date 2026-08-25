@@ -525,28 +525,6 @@ $: renderedTodos = (() => {
     applyTheme(theme);
   }
 
-// ============================================
-// 🔔 完成音效
-// ============================================
-
-/**
- * 播放任务完成提示音
- * 音效文件位置：static/complete.mp3
- * 如果音效文件不存在或播放失败，静默跳过，不影响功能
- */
-function playCompleteSound() {
-  try {
-    // 创建音频对象，指向音效文件
-    const audio = new Audio('/complete.mp3');
-    // 设置音量为 40%（避免太吵）
-    audio.volume = 0.4;
-    // 播放音效
-    audio.play();
-  } catch (error) {
-    // 音效播放失败时不做任何处理，不影响正常使用
-  }
-}
-
   async function toggleSearch() {
     showSearch = !showSearch;
     summaryMenuOpen = false;
@@ -1380,9 +1358,6 @@ async function toggleTodo(todo: Todo) {
     await todos.toggle(todo);
     // ⭐ 取消完成时，强制刷新数据（解决明天视图残留问题）
     await todos.refresh();
-    
-    // ⭐ 无论完成还是取消完成，都播放提示音
-    playCompleteSound();
   } catch (error) {
     todos.reportError(error);
   }
