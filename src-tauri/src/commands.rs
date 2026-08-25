@@ -1821,14 +1821,11 @@ fn set_todo_completed_in_connection(
 let created_id = if completed && !before.completed {
     create_next_repeat_instance(&transaction, &before, now, &updated_by)?
 } else if !completed && before.completed && before.repeat_rule.is_some() {
-    println!("🔥 取消完成: title={}, next_due_date={:?}", before.title, before.repeat_next_due_date);
-    
     if let Some(next_due_date) = before.repeat_next_due_date.as_deref() {
         let deleted = transaction.execute(
             "DELETE FROM todos WHERE title = ?1 AND date(due_at/1000, 'unixepoch') = ?2 AND completed = 0 AND deleted_at IS NULL",
             params![before.title, next_due_date],
         ).map_err(|e| e.to_string())?;
-        println!("🔥 删除了 {} 条记录", deleted);
     }
     None
 } else {
@@ -2582,7 +2579,6 @@ fn create_next_repeat_instance(
 ) -> Result<Option<i64>, String> {
 
 // 在 create_next_repeat_instance 函数开头加
-println!("🔥 创建重复实例: title={}, next_due_date={:?}", source.title, source.repeat_next_due_date);
 
     let Some(rule) = source.repeat_rule.as_deref() else {
         return Ok(None);
@@ -2619,8 +2615,6 @@ println!("🔥 创建重复实例: title={}, next_due_date={:?}", source.title, 
             |row| row.get(0),
         )
         .map_err(database_error)?;
-
-println!("🔥 插入任务: uuid={}, due_date={:?}, due_at={:?}", uuid, due_date, due_at);
 
     connection
         .execute(
