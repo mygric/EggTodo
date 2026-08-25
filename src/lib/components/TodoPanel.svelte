@@ -538,8 +538,8 @@ function playCompleteSound() {
   try {
     // 创建音频对象，指向音效文件
     const audio = new Audio('/complete.mp3');
-    // 设置音量为 40%（避免太吵）
-    audio.volume = 0.4;
+    // 设置音量为 70%（避免太吵）
+    audio.volume = 0.7;
     // 播放音效
     audio.play();
   } catch (error) {
