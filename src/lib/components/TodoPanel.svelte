@@ -1305,6 +1305,20 @@ $: renderedTodos = (() => {
   };
   const groupUuid = groupUuidByName(parsed.groupName) ?? newTodoGroupUuid();
 
+// ⭐ 严格防重复：检查标题 + 到期时间 + 分组
+const exists = $todos.items.some(t => 
+  t.title === parsed.title && 
+  t.group_uuid === groupUuid && 
+  !t.completed &&
+  t.due_date === parsed.schedule?.due_date
+);
+if (exists) {
+  alert('任务已存在，请勿重复添加');
+  title = "";
+  quickAddParsingDisabledFor = "";
+  return;
+}
+
   adding = true;
   try {
     const created = await todos.add(parsed.title, groupUuid);
@@ -1339,13 +1353,15 @@ $: renderedTodos = (() => {
   }
 }
 
-  async function toggleTodo(todo: Todo) {
-    try {
-      await todos.toggle(todo);
-    } catch (error) {
-      todos.reportError(error);
-    }
+async function toggleTodo(todo: Todo) {
+  try {
+    await todos.toggle(todo);
+    // ⭐ 取消完成时，强制刷新数据（解决明天视图残留问题）
+    await todos.refresh();
+  } catch (error) {
+    todos.reportError(error);
   }
+}
 
   async function editTodo(
     id: number,
@@ -2548,11 +2564,11 @@ $: renderedTodos = (() => {
   {#if listView === "notes"}
     {$translator("note.count", { count: $notes.items.length })}
   {:else if listView === "today"}
-    {$translator("todo.incompleteCount", { count: renderedTodos.filter(t => !t.completed).length })}
+    共 {renderedTodos.length} 项
   {:else if listView === "tomorrow"}
-    {$translator("todo.incompleteCount", { count: renderedTodos.filter(t => !t.completed).length })}
+    共 {renderedTodos.length} 项
   {:else}
-    {$translator("todo.incompleteCount", { count: $remainingCount })}
+    共 {renderedTodos.length} 项
   {/if}
 </span>
       <button
