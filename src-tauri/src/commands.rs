@@ -734,6 +734,28 @@ pub fn set_todo_completed(
     result
 }
 
+// 在 commands.rs 中添加（可以放在 set_todo_completed_in_connection 附近）
+fn delete_tomorrow_repeat_instance(
+    transaction: &rusqlite::Transaction,
+    title: &str,
+    next_due_date: &str,
+) -> Result<(), String> {
+    let deleted = transaction.execute(
+        "DELETE FROM todos 
+         WHERE title = ?1 
+         AND date(due_at/1000, 'unixepoch') = ?2 
+         AND completed = 0 
+         AND deleted_at IS NULL
+         AND repeat_rule IS NOT NULL",
+        params![title, next_due_date],
+    ).map_err(|e| e.to_string())?;
+    
+    if deleted > 0 {
+        println!("🔥 删除了 {} 条明天重复任务", deleted);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn set_todo_completed_by_uuid(
     uuid: String,
@@ -1798,6 +1820,16 @@ fn set_todo_completed_in_connection(
     let now = now_millis();
     let updated_by = device_id(connection).map_err(database_error)?;
     let transaction = connection.transaction().map_err(database_error)?;
+
+    // ⭐ 新增：如果任务是“取消完成”并且是重复任务，先删除明天的实例
+    if !completed && before.completed && before.repeat_rule.is_some() {
+        if let Some(next_due_date) = before.repeat_next_due_date.as_deref() {
+            // 调用我们添加的删除函数
+            delete_tomorrow_repeat_instance(&transaction, &before.title, next_due_date)?;
+        }
+        // 然后继续执行正常的 UPDATE，将当前任务标记为未完成
+    }
+
     let changed = transaction
         .execute(
             "

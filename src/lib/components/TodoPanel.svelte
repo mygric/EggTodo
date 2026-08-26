@@ -1260,23 +1260,26 @@
     }
   }
 
- async function toggleTodo(todo: Todo) {
+async function toggleTodo(todo: Todo) {
     try {
         await todos.toggle(todo);
-        // 强制刷新日历视图：通过切换视图来重新渲染
         if (listView === 'calendar') {
+            // 先刷新数据
+            await todos.refresh();
+            // 再切换视图强制渲染
             const currentView = listView;
-            // 先切换到其他视图
             listView = 'all';
-            // 等待一个微任务，让 Svelte 完成更新
             await tick();
-            // 再切回日历视图
             listView = currentView;
+            // 额外触发周视图刷新
+            agendaWeekVersion += 1;
         }
     } catch (error) {
         todos.reportError(error);
     }
 }
+
+
   async function editTodo(
     id: number,
     nextTitle: string,
