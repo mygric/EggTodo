@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EggDone",
+  "version": "1.0.7",
+  "identifier": "com.eggdone.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "蛋定 Todo",
+        "width": 540,
+        "height": 940,
+        "minWidth": 360,
+        "minHeight": 420,
+        "maxWidth": 1500,
+        "maxHeight": 940,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true
+      },
+      {
+        "label": "focus",
+        "title": "蛋定专注",
+        "url": "/?window=focus",
+        "width": 320,
+        "height": 430,
+        "minWidth": 300,
+        "minHeight": 390,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "EggDone Contributors",
+    "copyright": "Copyright © 2026 EggDone Contributors",
+    "license": "MIT",
+    "category": "Productivity",
+    "shortDescription": "轻量级跨平台托盘 Todo",
+    "longDescription": "EggDone（蛋定 Todo）是一款轻量级、托盘常驻、离线优先的 Todo 桌面应用，支持 SQLite 本地存储以及 S3 / MinIO 跨设备同步。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

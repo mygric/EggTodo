@@ -1,0 +1,315 @@
+import { writable } from "svelte/store";
+
+import {
+  getRemoteSyncState,
+  getSyncSettings,
+  syncNow,
+  type ManualSyncResult,
+  type RemoteSyncState,
+  type SyncSettings,
+} from "$lib/api/syncApi";
+
+export type SyncStatusKind =
+  | "idle"
+  | "syncing"
+  | "synced"
+  | "offline"
+  | "conflict"
+  | "failed";
+
+export interface SyncStatus {
+  kind: SyncStatusKind;
+  message: string;
+  detail?: string;
+  updatedAt: number | null;
+}
+
+const AUTO_SYNC_DELAY_MS = 4_000;
+const RETRY_DELAYS_MS = [1_500, 3_000];
+const FOREGROUND_POLL_INTERVAL_MS = 60_000;
+
+export const syncStatus = writable<SyncStatus>({
+  kind: "idle",
+  message: "同步未启用",
+  updatedAt: null,
+});
+
+let enabled = false;
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let running: Promise<ManualSyncResult> | null = null;
+let pendingAfterRun = false;
+let initialized = false;
+let foreground = false;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let remoteCheckRunning = false;
+let remoteStateInitialized = false;
+let knownTodoRemoteEtag: string | null = null;
+let knownNoteRemoteEtag: string | null = null;
+let knownNoteAttachmentRemoteEtag: string | null = null;
+
+export async function initializeAutoSync() {
+  if (initialized) return;
+  initialized = true;
+  try {
+    const settings = await getSyncSettings();
+    configureAutoSync(settings);
+  } catch (reason) {
+    setFailureStatus(reason);
+  }
+}
+
+export function configureAutoSync(settings: SyncSettings) {
+  enabled = settings.enabled && settings.credentialsConfigured;
+  remoteStateInitialized = false;
+  knownTodoRemoteEtag = null;
+  knownNoteRemoteEtag = null;
+  knownNoteAttachmentRemoteEtag = null;
+  if (!enabled) {
+    clearDebounce();
+    stopForegroundPolling();
+    pendingAfterRun = false;
+    syncStatus.set({
+      kind: "idle",
+      message: settings.enabled ? "同步凭据未配置" : "同步未启用",
+      updatedAt: null,
+    });
+  } else if (foreground) {
+    startForegroundPolling();
+    void checkRemoteAndSync();
+  }
+}
+
+export function setAutoSyncForeground(value: boolean) {
+  foreground = value;
+  if (!foreground) {
+    stopForegroundPolling();
+    return;
+  }
+  if (enabled) {
+    startForegroundPolling();
+    void checkRemoteAndSync();
+  }
+}
+
+export function scheduleAutoSync() {
+  if (!enabled) return;
+  if (running) {
+    pendingAfterRun = true;
+    return;
+  }
+  clearDebounce();
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    void runAutomaticSync();
+  }, AUTO_SYNC_DELAY_MS);
+}
+
+export async function runManualSync(): Promise<ManualSyncResult> {
+  clearDebounce();
+  pendingAfterRun = false;
+  return runSyncWithRetry();
+}
+
+async function runAutomaticSync() {
+  try {
+    await runSyncWithRetry();
+  } catch {
+    // Status is reported through syncStatus; local Todo operations remain successful.
+  }
+}
+
+function runSyncWithRetry(): Promise<ManualSyncResult> {
+  if (running) {
+    pendingAfterRun = true;
+    return running;
+  }
+
+  running = performSyncWithRetry().finally(() => {
+    running = null;
+    if (pendingAfterRun && enabled) {
+      pendingAfterRun = false;
+      scheduleAutoSync();
+    }
+  });
+  return running;
+}
+
+async function performSyncWithRetry(): Promise<ManualSyncResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    syncStatus.set({
+      kind: "syncing",
+      message:
+        attempt === 0 ? "正在同步…" : `网络异常，正在第 ${attempt} 次重试…`,
+      updatedAt: null,
+    });
+    try {
+      const result = await syncNow();
+      const cleanupNotice = result.message.includes("远端附件");
+      syncStatus.set({
+        kind: "synced",
+        message: cleanupNotice
+          ? result.message
+          : result.conflictRetried
+            ? `冲突已合并：任务 ${result.todoCount}，便签 ${result.noteCount}，附件 ${result.noteAttachmentCount}`
+            : `同步完成：任务 ${result.todoCount}，便签 ${result.noteCount}，附件 ${result.noteAttachmentCount}`,
+        updatedAt: Date.now(),
+      });
+      knownTodoRemoteEtag = result.todoRemoteEtag;
+      knownNoteRemoteEtag = result.noteRemoteEtag;
+      knownNoteAttachmentRemoteEtag = result.noteAttachmentRemoteEtag;
+      remoteStateInitialized = true;
+      return result;
+    } catch (reason) {
+      lastError = reason;
+      if (!isRetryable(reason) || attempt === RETRY_DELAYS_MS.length) {
+        setFailureStatus(reason);
+        throw reason;
+      }
+      await delay(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
+async function checkRemoteAndSync() {
+  if (!enabled || !foreground || remoteCheckRunning) return;
+  if (running) {
+    pendingAfterRun = true;
+    return;
+  }
+
+  remoteCheckRunning = true;
+  try {
+    const remote = await getRemoteStateWithRetry();
+    const changed =
+      !remoteStateInitialized ||
+      remote.todoObjectExists !== (knownTodoRemoteEtag !== null) ||
+      remote.todoEtag !== knownTodoRemoteEtag ||
+      remote.noteObjectExists !== (knownNoteRemoteEtag !== null) ||
+      remote.noteEtag !== knownNoteRemoteEtag ||
+      remote.noteAttachmentObjectExists !== (knownNoteAttachmentRemoteEtag !== null) ||
+      remote.noteAttachmentEtag !== knownNoteAttachmentRemoteEtag;
+    remoteStateInitialized = true;
+    knownTodoRemoteEtag = remote.todoEtag;
+    knownNoteRemoteEtag = remote.noteEtag;
+    knownNoteAttachmentRemoteEtag = remote.noteAttachmentEtag;
+    if (changed) {
+      await runAutomaticSync();
+    }
+  } catch (reason) {
+    setFailureStatus(reason);
+  } finally {
+    remoteCheckRunning = false;
+  }
+}
+
+async function getRemoteStateWithRetry(): Promise<RemoteSyncState> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await getRemoteSyncState();
+    } catch (reason) {
+      lastError = reason;
+      if (!isRetryable(reason) || attempt === RETRY_DELAYS_MS.length) {
+        throw reason;
+      }
+      await delay(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
+function startForegroundPolling() {
+  if (pollTimer || !enabled || !foreground) return;
+  pollTimer = setInterval(() => {
+    void checkRemoteAndSync();
+  }, FOREGROUND_POLL_INTERVAL_MS);
+}
+
+function stopForegroundPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function setFailureStatus(reason: unknown) {
+  const detail = errorMessage(reason);
+  const kind = isConflict(detail)
+    ? "conflict"
+    : isRetryable(detail)
+      ? "offline"
+      : "failed";
+  syncStatus.set({
+    kind,
+    message: failureMessage(kind),
+    detail,
+    updatedAt: Date.now(),
+  });
+}
+
+function failureMessage(kind: Exclude<SyncStatusKind, "idle" | "syncing" | "synced">) {
+  if (kind === "offline") return "网络暂时不可用，将在下次同步时重试";
+  if (kind === "conflict") return "远端内容持续变化，请稍后再次同步";
+  return "同步未完成，请重试";
+}
+
+function isRetryable(reason: unknown) {
+  const message = errorMessage(reason).toLowerCase();
+  if (
+    message.includes("凭据") ||
+    message.includes("权限") ||
+    message.includes("配置") ||
+    isConflict(message)
+  ) {
+    return false;
+  }
+  const statusCode = message.match(/状态码\s*(\d{3})/);
+  if (statusCode) {
+    const code = Number(statusCode[1]);
+    return code === 408 || code === 425 || code === 429 || (code >= 500 && code <= 599);
+  }
+  return [
+    "连接",
+    "网络",
+    "超时",
+    "timeout",
+    "offline",
+    "connection",
+    "dns",
+    "request",
+    "temporarily unavailable",
+    "connection reset",
+    "broken pipe",
+    "下载同步文件失败",
+    "上传同步文件失败",
+    "检查远端同步文件失败",
+    "下载便签同步文件失败",
+    "上传便签同步文件失败",
+    "下载附件元数据失败",
+    "上传附件元数据失败",
+    "检查远端附件失败",
+    "上传附件失败",
+    "下载附件失败",
+  ].some((keyword) => message.includes(keyword));
+}
+
+function isConflict(message: string) {
+  return message.includes("远端文件持续发生变化");
+}
+
+function clearDebounce() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+}
+
+function delay(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function errorMessage(reason: unknown) {
+  return reason instanceof Error ? reason.message : String(reason);
+}

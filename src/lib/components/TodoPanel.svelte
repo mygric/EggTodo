@@ -1,0 +1,3095 @@
+<script lang="ts">
+  import { isTauri } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { flip } from "svelte/animate";
+  import { onMount, tick } from "svelte";
+  import packageMetadata from "../../../package.json";
+
+  import { languageState, translator } from "$lib/i18n";
+  import { localizedErrorMessage } from "$lib/i18n/errors";
+  import { todoApi } from "$lib/api/todoApi";
+  import type { TodoScheduleInput } from "$lib/api/todoApi";
+  import {
+    initializeDesktopSettings,
+    type DesktopSettings,
+  } from "$lib/api/desktopSettings";
+  import {
+    completedCount,
+    remainingCount,
+    todos,
+  } from "$lib/stores/todoStore";
+  import { notes, visibleNotes } from "$lib/stores/noteStore";
+  import { noteAttachmentApi } from "$lib/api/noteAttachmentApi";
+  import {
+    initializeAutoSync,
+    scheduleAutoSync,
+    setAutoSyncForeground,
+    syncStatus,
+  } from "$lib/sync/autoSync";
+  import type {
+    RepeatDeleteScope,
+    RepeatEditScope,
+    Todo,
+    TodoGroup,
+    Note,
+    NoteAttachment,
+    NoteColor,
+  } from "$lib/types";
+  import { movePreviewByPointer } from "$lib/utils/reorderPreview";
+  import { reorderNoteAttachmentWithinKind } from "$lib/utils/noteAttachmentOrder";
+  import { isDueTodayOrOverdue, localDateString } from "$lib/utils/todoDates";
+  import {
+    filterTodos,
+    type TodoListView,
+  } from "$lib/utils/todoFilters";
+  import { parseQuickAdd } from "$lib/utils/quickAdd";
+  import {
+    clearFocusTarget,
+    FOCUS_SETTINGS_CHANGED_EVENT,
+    getFocusDurations,
+    getFocusTarget,
+    saveFocusTarget,
+    type FocusTarget,
+    type FocusDurations,
+    type FocusPhase,
+  } from "$lib/utils/focusSettings";
+  import {
+    DEFAULT_LIST_VIEW_KEY,
+    LAST_LIST_VIEW_KEY,
+    initialListView,
+    normalizeDefaultListViewMode,
+    type DefaultListViewMode,
+  } from "$lib/utils/viewPreferences";
+  import DataManager from "./DataManager.svelte";
+  import SettingsPanel from "./SettingsPanel.svelte";
+  import TodoItem from "./TodoItem.svelte";
+  import NoteEditor from "./NoteEditor.svelte";
+  import NoteList from "./NoteList.svelte";
+
+  type Theme = "light" | "dark";
+  type MainView = TodoListView | "notes";
+  const NOTE_DRAFT_UUID = "__new_note_draft__";
+  const NOTE_DRAFT_SAVE_DELAY_MS = 600;
+  type GroupColor = "yellow" | "green" | "blue" | "peach" | "lavender" | "gray";
+  type GroupDropTarget = string | null;
+  type FocusTodoPayload = { uuid: string };
+  type QuadrantKey =
+    | "importantUrgent"
+    | "importantNotUrgent"
+    | "normalUrgent"
+    | "normalNotUrgent";
+  type AgendaKey =
+    | "overdue"
+    | "today"
+    | "tomorrow"
+    | "week"
+    | "later"
+    | "unscheduled";
+
+  let groupColorOptions: Array<{ value: GroupColor; label: string }> = [];
+  $: groupColorOptions = [
+    { value: "yellow", label: $translator("group.colorYellow") },
+    { value: "green", label: $translator("group.colorGreen") },
+    { value: "blue", label: $translator("group.colorBlue") },
+    { value: "peach", label: $translator("group.colorPeach") },
+    { value: "lavender", label: $translator("group.colorLavender") },
+    { value: "gray", label: $translator("group.colorGray") },
+  ];
+
+  let quadrantDefinitions: Array<{
+    key: QuadrantKey;
+    title: string;
+    subtitle: string;
+    tone: string;
+  }> = [];
+  $: quadrantDefinitions = [
+    {
+      key: "importantUrgent",
+      title: $translator("matrix.q1.title"),
+      subtitle: $translator("matrix.q1.subtitle"),
+      tone: "warm",
+    },
+    {
+      key: "importantNotUrgent",
+      title: $translator("matrix.q2.title"),
+      subtitle: $translator("matrix.q2.subtitle"),
+      tone: "gold",
+    },
+    {
+      key: "normalUrgent",
+      title: $translator("matrix.q3.title"),
+      subtitle: $translator("matrix.q3.subtitle"),
+      tone: "blue",
+    },
+    {
+      key: "normalNotUrgent",
+      title: $translator("matrix.q4.title"),
+      subtitle: $translator("matrix.q4.subtitle"),
+      tone: "gray",
+    },
+  ];
+
+  let agendaDefinitions: Array<{
+    key: AgendaKey;
+    title: string;
+    subtitle: string;
+  }> = [];
+  $: agendaDefinitions = [
+    { key: "overdue", title: $translator("agenda.overdue.title"), subtitle: $translator("agenda.overdue.subtitle") },
+    { key: "today", title: $translator("agenda.today.title"), subtitle: $translator("agenda.today.subtitle") },
+    { key: "tomorrow", title: $translator("agenda.tomorrow.title"), subtitle: $translator("agenda.tomorrow.subtitle") },
+    { key: "week", title: $translator("agenda.week.title"), subtitle: $translator("agenda.week.subtitle") },
+    { key: "later", title: $translator("agenda.later.title"), subtitle: $translator("agenda.later.subtitle") },
+    { key: "unscheduled", title: $translator("agenda.unscheduled.title"), subtitle: $translator("agenda.unscheduled.subtitle") },
+  ];
+  let title = "";
+  let quickAddParsingDisabledFor = "";
+  let adding = false;
+  let showAbout = false;
+  let showDataManager = false;
+  let showSettings = false;
+  let showFocus = false;
+  let focusDurations: FocusDurations = getFocusDurations();
+  let focusPhase: FocusPhase = "focus";
+  let focusRunning = false;
+  let focusEndsAt: number | null = null;
+  let focusRemainingMs = focusDurations.focus;
+  let focusDisplayTime = "25:00";
+  let focusDisplayHint = "";
+  let focusDisplayPhase = "";
+  let focusIllustrationSrc = "/focus-illustration.png";
+  let focusTarget: FocusTarget | null = getFocusTarget();
+  let completingFocusTarget = false;
+  let focusCompletionVisible = false;
+  let focusCompletionTimer: number | null = null;
+  let desktopSettings: DesktopSettings | null = null;
+  let theme: Theme = "light";
+  let reorderAnimationDuration = 170;
+  let inputElement: HTMLInputElement;
+  let draggedTodo: Todo | null = null;
+  let dragPointerId: number | null = null;
+  let previewOrderIds: number[] | null = null;
+  let dragGroupTarget: GroupDropTarget | undefined = undefined;
+  let undoTodos: Todo[] = [];
+  let undoTimer: ReturnType<typeof setTimeout> | null = null;
+  let confirmingClear = false;
+  let clearTimer: ReturnType<typeof setTimeout> | null = null;
+  let showSearch = false;
+  let summaryMenuOpen = false;
+  let searchQuery = "";
+  let showCompleted = true;
+  let listView: MainView = "all";
+  let selectedNoteUuid: string | null = null;
+  let noteDraft: Note | null = null;
+  let noteDraftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let noteDraftCreatePromise: Promise<Note | null> | null = null;
+  let deletedNote: Note | null = null;
+  let noteUndoTimer: ReturnType<typeof setTimeout> | null = null;
+  let noteAttachmentsByNote: Record<string, NoteAttachment[]> = {};
+  let noteAttachmentPreviewUrls: Record<string, string> = {};
+  let noteAttachmentBusy = false;
+  let noteAttachmentError = "";
+  let visibleNotePreviewAttachments: NoteAttachment[] = [];
+  let visibleNotePreviewRequestKey = "";
+  let deletedNoteAttachment: NoteAttachment | null = null;
+  let noteAttachmentUndoTimer: ReturnType<typeof setTimeout> | null = null;
+  let selectedQuadrant: QuadrantKey | "all" = "all";
+  let selectedAgendaDate: string | null = null;
+  let agendaWeekStartAt = startOfAgendaWeek();
+  let agendaWeekVersion = 0;
+  let agendaDatePickerOpen = false;
+  let defaultListViewMode: DefaultListViewMode = "remember";
+  let selectedGroup = "all";
+  let creatingGroup = false;
+  let groupName = "";
+  let groupSaving = false;
+  let managingGroup = false;
+  let editingGroupName = "";
+  let groupDeleting = false;
+  let confirmingGroupDelete = false;
+  let groupDeleteTimer: ReturnType<typeof setTimeout> | null = null;
+  let groupScrollElement: HTMLElement;
+  let groupScrollOverflowing = false;
+  let groupScrollCanMoveLeft = false;
+  let groupScrollCanMoveRight = false;
+  let groupScrollPointerId: number | null = null;
+  let groupScrollStartX = 0;
+  let groupScrollStartLeft = 0;
+  let groupScrollDragging = false;
+  let suppressGroupClick = false;
+  let searchInput: HTMLInputElement;
+  let summaryActionsElement: HTMLElement;
+  let selectedTodoId: number | null = null;
+  let editRequestTodoId: number | null = null;
+  let editRequestSeq = 0;
+  let batchMode = false;
+  let batchSelectedIds = new Set<number>();
+  let batchBusy = false;
+  let batchMoveTarget = "";
+  $: searchActive = searchQuery.trim().length > 0;
+  $: reorderDisabled = searchActive || listView !== "all";
+  $: todayCount = $todos.items.filter((todo) => isDueTodayOrOverdue(todo)).length;
+  $: activeGroupUuid = groupFilterValue(selectedGroup);
+  $: selectedGroupObject = $todos.groups.find(
+    (group) => group.uuid === selectedGroup,
+  );
+  $: selectedGroupIndex = $todos.groups.findIndex(
+    (group) => group.uuid === selectedGroup,
+  );
+  $: selectedNote = noteDraft ?? (selectedNoteUuid === null
+    ? null
+    : $notes.items.find((note) => note.uuid === selectedNoteUuid) ?? null);
+  $: noteEditorSaving =
+    $notes.saving || noteDraftSaveTimer !== null || noteDraftCreatePromise !== null;
+  $: visibleNotePreviewAttachments = listView === "notes"
+    ? $visibleNotes
+        .map((note) => (noteAttachmentsByNote[note.uuid] ?? []).find((attachment) => attachment.kind === "image"))
+        .filter((attachment): attachment is NoteAttachment => attachment !== undefined)
+    : [];
+  $: {
+    const requestKey = visibleNotePreviewAttachments
+      .map((attachment) => `${attachment.uuid}:${attachment.local_preview_path ?? ""}:${attachment.transfer_state}`)
+      .join("|");
+    if (requestKey && requestKey !== visibleNotePreviewRequestKey) {
+      visibleNotePreviewRequestKey = requestKey;
+      void loadAttachmentPreviews(visibleNotePreviewAttachments);
+    }
+  }
+  $: filteredTodos = filterTodos($todos.items, searchQuery, showCompleted, {
+    view: listView === "notes" ? "all" : listView,
+    groupUuid: activeGroupUuid,
+  });
+  $: renderedTodos = applyPreviewOrder(filteredTodos, previewOrderIds);
+  $: batchSelectedTodos = renderedTodos.filter((todo) =>
+    batchSelectedIds.has(todo.id),
+  );
+  $: batchIncompleteSelectedCount = batchSelectedTodos.filter(
+    (todo) => !todo.completed,
+  ).length;
+  $: batchSelectionCount = batchSelectedTodos.length;
+  $: if (
+    selectedTodoId !== null &&
+    !renderedTodos.some((todo) => todo.id === selectedTodoId)
+  ) {
+    selectedTodoId = renderedTodos[0]?.id ?? null;
+  }
+  $: if (batchSelectedIds.size > 0) {
+    const visibleIds = new Set(renderedTodos.map((todo) => todo.id));
+    const nextIds = new Set(
+      [...batchSelectedIds].filter((id) => visibleIds.has(id)),
+    );
+    if (nextIds.size !== batchSelectedIds.size) {
+      batchSelectedIds = nextIds;
+    }
+  }
+  $: quickAddResult = parseQuickAdd(
+    title,
+    new Date(),
+    $todos.groups.map((group) => group.name),
+  );
+  $: quickAddPreview =
+    title.trim().length > 0 &&
+    quickAddParsingDisabledFor !== title &&
+    (quickAddResult.schedule !== null ||
+      quickAddResult.groupName !== null ||
+      quickAddResult.priority === 1)
+      ? quickAddResult
+      : null;
+  $: notes.setSearchQuery(listView === "notes" ? searchQuery : "");
+  $: focusDisplayPhase = focusCompletionVisible
+    ? $translator("focus.completed")
+    : focusPhase === "focus"
+      ? $translator("focus.title")
+      : $translator("focus.break");
+  $: focusDisplayTime = formatFocusTime(focusRemainingMs);
+  $: focusDisplayHint = focusCompletionVisible
+    ? $translator("focus.hintCompleted")
+    : focusRunning
+      ? $translator("focus.hintRunning")
+      : focusRemainingMs === focusDurations[focusPhase]
+        ? $translator("focus.hintReady")
+        : $translator("focus.hintPaused");
+  $: focusIllustrationSrc = focusCompletionVisible
+    ? "/focus-done.png"
+    : focusPhase === "break"
+      ? "/focus-break.png"
+      : "/focus-illustration.png";
+
+  onMount(() => {
+    const unlisteners: UnlistenFn[] = [];
+    let mounted = true;
+    const groupResizeObserver = new ResizeObserver(updateGroupScrollState);
+    const groupMutationObserver = new MutationObserver(() => {
+      updateGroupScrollState();
+      requestAnimationFrame(() => revealSelectedGroup(selectedGroup, false));
+    });
+    const focusInterval = window.setInterval(updateFocusTimer, 1000);
+    window.addEventListener(FOCUS_SETTINGS_CHANGED_EVENT, refreshFocusDurations);
+    window.addEventListener("storage", refreshFocusDurations);
+    groupResizeObserver.observe(groupScrollElement);
+    groupMutationObserver.observe(groupScrollElement, { childList: true });
+    updateGroupScrollState();
+    const savedTheme = localStorage.getItem("eggdone-theme");
+    showCompleted =
+      localStorage.getItem("eggdone-show-completed") !== "false";
+    defaultListViewMode = normalizeDefaultListViewMode(
+      localStorage.getItem(DEFAULT_LIST_VIEW_KEY),
+    );
+    listView = initialListView(
+      defaultListViewMode,
+      localStorage.getItem(LAST_LIST_VIEW_KEY),
+    );
+    selectedGroup = localStorage.getItem("eggdone-selected-group") ?? "all";
+    theme =
+      savedTheme === "light" || savedTheme === "dark"
+        ? savedTheme
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    applyTheme(theme);
+    reorderAnimationDuration = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches
+      ? 0
+      : 170;
+
+    void todos.load();
+    void notes.load().then(() => loadAllNoteAttachments());
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        summaryMenuOpen &&
+        event.target instanceof Node &&
+        !summaryActionsElement?.contains(event.target)
+      ) {
+        summaryMenuOpen = false;
+      }
+    }
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    if (isTauri()) {
+      void initializeAutoSync().then(async () => {
+        const appWindow = getCurrentWindow();
+        setAutoSyncForeground(await appWindow.isFocused());
+        const unlistenFocus = await appWindow.onFocusChanged(({ payload }) => {
+          setAutoSyncForeground(payload);
+        });
+        if (mounted) {
+          unlisteners.push(unlistenFocus);
+        } else {
+          unlistenFocus();
+        }
+      });
+      void initializeDesktopSettings()
+        .then((settings) => (desktopSettings = settings))
+        .catch((error) => todos.reportError(error));
+      void listen("focus-new-todo", () => {
+        showAbout = false;
+        showDataManager = false;
+        showSettings = false;
+        requestAnimationFrame(() => inputElement?.focus());
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("show-about", () => {
+        showDataManager = false;
+        showSettings = false;
+        showAbout = true;
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("show-today", () => {
+        showAbout = false;
+        showDataManager = false;
+        showSettings = false;
+        showSearch = false;
+        searchQuery = "";
+        setListView("today");
+        requestAnimationFrame(() => inputElement?.focus());
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen<FocusTodoPayload>("focus-todo", (event) => {
+        void focusTodoByUuid(event.payload.uuid);
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("single-instance", () => {
+        showAbout = false;
+        showDataManager = false;
+        showSettings = false;
+        requestAnimationFrame(() => inputElement?.focus());
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("todos-changed", () => {
+        void todos.refresh();
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("notes-changed", () => {
+        notes.markSynced();
+        void notes.refresh().then(() => loadAllNoteAttachments());
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen<string>("note-attachments-changed", (event) => {
+        void refreshNoteAttachments(event.payload, selectedNoteUuid === event.payload);
+      }).then((unlisten) => unlisteners.push(unlisten));
+      void listen("note-attachment-cache-cleared", () => {
+        Object.values(noteAttachmentPreviewUrls).forEach((url) => URL.revokeObjectURL(url));
+        noteAttachmentPreviewUrls = {};
+        void loadAllNoteAttachments().then(async () => {
+          if (selectedNoteUuid) await refreshNoteAttachments(selectedNoteUuid);
+        });
+      }).then((unlisten) => unlisteners.push(unlisten));
+    }
+
+    return () => {
+      mounted = false;
+      setAutoSyncForeground(false);
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      unlisteners.forEach((unlisten) => unlisten());
+      if (undoTimer) clearTimeout(undoTimer);
+      if (clearTimer) clearTimeout(clearTimer);
+      if (groupDeleteTimer) clearTimeout(groupDeleteTimer);
+      if (noteUndoTimer) clearTimeout(noteUndoTimer);
+      if (noteAttachmentUndoTimer) clearTimeout(noteAttachmentUndoTimer);
+      Object.values(noteAttachmentPreviewUrls).forEach((url) => URL.revokeObjectURL(url));
+      void flushAllNoteChanges().catch(() => undefined);
+      clearFocusCompletionTimer();
+      window.clearInterval(focusInterval);
+      window.removeEventListener(
+        FOCUS_SETTINGS_CHANGED_EVENT,
+        refreshFocusDurations,
+      );
+      window.removeEventListener("storage", refreshFocusDurations);
+      groupResizeObserver.disconnect();
+      groupMutationObserver.disconnect();
+      removeDragListeners();
+    };
+  });
+
+  function toggleTheme() {
+    theme = theme === "light" ? "dark" : "light";
+    localStorage.setItem("eggdone-theme", theme);
+    applyTheme(theme);
+  }
+
+  async function toggleSearch() {
+    showSearch = !showSearch;
+    summaryMenuOpen = false;
+    if (!showSearch) {
+      searchQuery = "";
+      cancelDrag();
+      inputElement?.focus();
+      return;
+    }
+
+    await tick();
+    searchInput?.focus();
+  }
+
+  function handleSearchKeydown(event: KeyboardEvent) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    if (searchQuery) {
+      searchQuery = "";
+      return;
+    }
+    void toggleSearch();
+  }
+
+  function toggleCompletedVisibility() {
+    showCompleted = !showCompleted;
+    summaryMenuOpen = false;
+    localStorage.setItem("eggdone-show-completed", String(showCompleted));
+    clearBatchSelection();
+    cancelDrag();
+  }
+
+  function setListView(view: MainView) {
+    if (listView === "notes" && view !== "notes") {
+      void closeNoteEditor();
+      searchQuery = "";
+      showSearch = false;
+    }
+    listView = view;
+    if (view !== "quadrants") {
+      selectedQuadrant = "all";
+    }
+    if (view !== "calendar") {
+      selectedAgendaDate = null;
+      agendaWeekStartAt = startOfAgendaWeek();
+      agendaWeekVersion += 1;
+      agendaDatePickerOpen = false;
+    }
+    summaryMenuOpen = false;
+    if (view !== "notes") localStorage.setItem(LAST_LIST_VIEW_KEY, view);
+    selectedTodoId = null;
+    clearBatchSelection();
+    cancelDrag();
+  }
+
+  async function createNote() {
+    await flushAllNoteChanges();
+    const now = Date.now();
+    noteDraft = {
+      id: 0,
+      uuid: NOTE_DRAFT_UUID,
+      title: "",
+      content: "",
+      color: "default",
+      pinned: false,
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      updated_by: "",
+    };
+    selectedNoteUuid = null;
+  }
+
+  function openNote(note: Note) {
+    discardNoteDraft();
+    selectedNoteUuid = note.uuid;
+    void refreshNoteAttachments(note.uuid);
+  }
+
+  async function loadAllNoteAttachments() {
+    const items = $notes.items;
+    const results = await Promise.all(
+      items.map(async (note) => [note.uuid, await noteAttachmentApi.list(note.uuid)] as const),
+    );
+    const next: Record<string, NoteAttachment[]> = {};
+    for (const [uuid, attachments] of results) {
+      next[uuid] = attachments;
+    }
+    noteAttachmentsByNote = next;
+    releaseUnusedAttachmentPreviews(Object.values(next).flat());
+  }
+
+  async function refreshNoteAttachments(noteUuid: string, loadPreviews = true) {
+    if (!noteUuid || noteUuid === NOTE_DRAFT_UUID) return;
+    const attachments = await noteAttachmentApi.list(noteUuid);
+    noteAttachmentsByNote = { ...noteAttachmentsByNote, [noteUuid]: attachments };
+    releaseUnusedAttachmentPreviews(Object.values(noteAttachmentsByNote).flat());
+    if (loadPreviews) await loadAttachmentPreviews(attachments);
+  }
+
+  function releaseUnusedAttachmentPreviews(activeAttachments: NoteAttachment[]) {
+    const activeUuids = new Set(activeAttachments.map((attachment) => attachment.uuid));
+    const nextUrls = { ...noteAttachmentPreviewUrls };
+    let changed = false;
+    for (const [uuid, url] of Object.entries(nextUrls)) {
+      if (activeUuids.has(uuid)) continue;
+      URL.revokeObjectURL(url);
+      delete nextUrls[uuid];
+      changed = true;
+    }
+    if (changed) noteAttachmentPreviewUrls = nextUrls;
+  }
+
+  async function loadAttachmentPreviews(attachments: NoteAttachment[]) {
+    for (const attachment of attachments) {
+      if (attachment.kind !== "image" || noteAttachmentPreviewUrls[attachment.uuid]) continue;
+      try {
+        const url = await noteAttachmentApi.previewUrl(attachment);
+        noteAttachmentPreviewUrls = { ...noteAttachmentPreviewUrls, [attachment.uuid]: url };
+      } catch {
+        // Remote-only previews are downloaded on demand in DA6.
+      }
+    }
+  }
+
+  function attachmentDraftTitle(fileName: string, fallback: string) {
+    const withoutExtension = fileName.replace(/\.[^.]+$/, "").trim();
+    return withoutExtension || fallback;
+  }
+
+  async function ensureNoteForAttachment(firstFile: File, fallback: string): Promise<Note | null> {
+    if (noteDraft) {
+      if (!hasNoteDraftContent(noteDraft)) {
+        noteDraft = { ...noteDraft, title: attachmentDraftTitle(firstFile.name, fallback) };
+      }
+      return persistNoteDraft();
+    }
+    await flushAllNoteChanges();
+    return selectedNote;
+  }
+
+  async function addNoteImages(files: File[]) {
+    if (files.length === 0 || noteAttachmentBusy) return;
+    noteAttachmentBusy = true;
+    noteAttachmentError = "";
+    try {
+      const note = await ensureNoteForAttachment(files[0], $translator("note.imageDraftTitle"));
+      if (!note) throw new Error($translator("attachment.saveNoteBeforeImage"));
+      const existing = noteAttachmentsByNote[note.uuid] ?? [];
+      const imageCount = existing.filter((attachment) => attachment.kind === "image").length;
+      const available = Math.max(0, 9 - imageCount);
+      for (const file of files.slice(0, available)) {
+        await noteAttachmentApi.createImage(note.uuid, file);
+      }
+      await refreshNoteAttachments(note.uuid);
+      scheduleAutoSync();
+    } catch (reason) {
+      noteAttachmentError = localizedErrorMessage(reason);
+    } finally {
+      noteAttachmentBusy = false;
+    }
+  }
+
+  async function addNoteFiles(files: File[]) {
+    if (files.length === 0 || noteAttachmentBusy) return;
+    noteAttachmentBusy = true;
+    noteAttachmentError = "";
+    try {
+      const note = await ensureNoteForAttachment(files[0], $translator("note.fileDraftTitle"));
+      if (!note) throw new Error($translator("attachment.saveNoteBeforeFile"));
+      for (const file of files) {
+        await noteAttachmentApi.createFile(note.uuid, file);
+      }
+      await refreshNoteAttachments(note.uuid);
+      scheduleAutoSync();
+    } catch (reason) {
+      noteAttachmentError = localizedErrorMessage(reason);
+    } finally {
+      noteAttachmentBusy = false;
+    }
+  }
+
+  async function deleteNoteAttachment(attachment: NoteAttachment) {
+    deletedNoteAttachment = await noteAttachmentApi.delete(attachment.uuid);
+    await refreshNoteAttachments(attachment.note_uuid);
+    if (noteAttachmentUndoTimer) clearTimeout(noteAttachmentUndoTimer);
+    noteAttachmentUndoTimer = setTimeout(() => {
+      deletedNoteAttachment = null;
+      noteAttachmentUndoTimer = null;
+    }, 6000);
+    scheduleAutoSync();
+  }
+
+  async function undoNoteAttachmentDelete() {
+    if (!deletedNoteAttachment) return;
+    const attachment = deletedNoteAttachment;
+    deletedNoteAttachment = null;
+    if (noteAttachmentUndoTimer) clearTimeout(noteAttachmentUndoTimer);
+    noteAttachmentUndoTimer = null;
+    try {
+      await noteAttachmentApi.restore(attachment.uuid);
+      await refreshNoteAttachments(attachment.note_uuid);
+      scheduleAutoSync();
+    } catch (reason) {
+      deletedNoteAttachment = attachment;
+      noteAttachmentError = localizedErrorMessage(reason);
+    }
+  }
+
+  async function retryNoteAttachment(attachment: NoteAttachment) {
+    noteAttachmentError = "";
+    try {
+      if (attachment.remote_uploaded) {
+        await noteAttachmentApi.retry(attachment.uuid);
+        if (attachment.kind === "image" && attachment.local_preview_path === null) {
+          const url = await noteAttachmentApi.previewUrl(attachment);
+          const previous = noteAttachmentPreviewUrls[attachment.uuid];
+          if (previous) URL.revokeObjectURL(previous);
+          noteAttachmentPreviewUrls = { ...noteAttachmentPreviewUrls, [attachment.uuid]: url };
+        } else {
+          const url = await noteAttachmentApi.originalUrl(attachment);
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        await noteAttachmentApi.retry(attachment.uuid);
+        scheduleAutoSync();
+      }
+      await refreshNoteAttachments(attachment.note_uuid);
+    } catch (reason) {
+      noteAttachmentError = localizedErrorMessage(reason);
+      await refreshNoteAttachments(attachment.note_uuid).catch(() => undefined);
+    }
+  }
+
+  async function moveNoteAttachment(attachment: NoteAttachment, direction: -1 | 1) {
+    if (noteAttachmentBusy) return;
+    const current = noteAttachmentsByNote[attachment.note_uuid] ?? [];
+    const reordered = reorderNoteAttachmentWithinKind(current, attachment.uuid, direction);
+    if (!reordered) return;
+
+    noteAttachmentBusy = true;
+    noteAttachmentError = "";
+    try {
+      const saved = await noteAttachmentApi.reorder(
+        attachment.note_uuid,
+        reordered.map((item) => item.uuid),
+      );
+      noteAttachmentsByNote = { ...noteAttachmentsByNote, [attachment.note_uuid]: saved };
+      scheduleAutoSync();
+    } catch (reason) {
+      noteAttachmentError = localizedErrorMessage(reason);
+      await refreshNoteAttachments(attachment.note_uuid);
+    } finally {
+      noteAttachmentBusy = false;
+    }
+  }
+
+  function updateNote(note: Note, nextTitle: string, content: string) {
+    if (note.uuid === NOTE_DRAFT_UUID && noteDraft) {
+      noteDraft = { ...noteDraft, title: nextTitle, content };
+      scheduleNoteDraftSave();
+      return;
+    }
+    notes.scheduleUpdate(note, nextTitle, content);
+  }
+
+  async function closeNoteEditor() {
+    if (noteDraft && !hasNoteDraftContent(noteDraft)) {
+      notes.cancelPending();
+      discardNoteDraft();
+      selectedNoteUuid = null;
+      return;
+    }
+    await flushAllNoteChanges();
+    discardNoteDraft();
+    selectedNoteUuid = null;
+  }
+
+  async function pinNote(note: Note, pinned: boolean) {
+    if (note.uuid === NOTE_DRAFT_UUID && noteDraft) {
+      noteDraft = { ...noteDraft, pinned };
+      scheduleNoteDraftSave();
+      return;
+    }
+    await notes.setPinned(note, pinned);
+  }
+
+  async function colorNote(note: Note, color: NoteColor) {
+    if (note.uuid === NOTE_DRAFT_UUID && noteDraft) {
+      noteDraft = { ...noteDraft, color };
+      scheduleNoteDraftSave();
+      return;
+    }
+    await notes.setColor(note, color);
+  }
+
+  async function deleteNote(note: Note) {
+    if (note.uuid === NOTE_DRAFT_UUID) {
+      if (noteDraftCreatePromise) {
+        const created = await noteDraftCreatePromise;
+        if (created) await deleteNote(created);
+        return;
+      }
+      discardNoteDraft();
+      selectedNoteUuid = null;
+      return;
+    }
+    notes.cancelPending();
+    deletedNote = await notes.remove(note);
+    selectedNoteUuid = null;
+    if (noteUndoTimer) clearTimeout(noteUndoTimer);
+    noteUndoTimer = setTimeout(() => (deletedNote = null), 6000);
+  }
+
+  function hasNoteDraftContent(draft: Note) {
+    return draft.title.trim().length > 0 || draft.content.trim().length > 0;
+  }
+
+  function scheduleNoteDraftSave() {
+    if (noteDraftSaveTimer) clearTimeout(noteDraftSaveTimer);
+    noteDraftSaveTimer = null;
+    if (!noteDraft || !hasNoteDraftContent(noteDraft)) return;
+    noteDraftSaveTimer = setTimeout(() => {
+      noteDraftSaveTimer = null;
+      void persistNoteDraft().catch(() => undefined);
+    }, NOTE_DRAFT_SAVE_DELAY_MS);
+  }
+
+  async function persistNoteDraft(): Promise<Note | null> {
+    if (noteDraftCreatePromise) return noteDraftCreatePromise;
+    if (!noteDraft || !hasNoteDraftContent(noteDraft)) return null;
+
+    const task = createNoteFromDraft(noteDraft);
+    noteDraftCreatePromise = task;
+    try {
+      return await task;
+    } finally {
+      noteDraftCreatePromise = null;
+    }
+  }
+
+  async function createNoteFromDraft(initialDraft: Note): Promise<Note> {
+    let created = await notes.add(
+      initialDraft.title,
+      initialDraft.content,
+      initialDraft.color,
+    );
+    const latestDraft = noteDraft ?? initialDraft;
+
+    if (
+      latestDraft.title !== created.title ||
+      latestDraft.content !== created.content
+    ) {
+      notes.scheduleUpdate(created, latestDraft.title, latestDraft.content);
+      created = (await notes.flushPending()) ?? created;
+    }
+    if (latestDraft.color !== created.color) {
+      created = await notes.setColor(created, latestDraft.color);
+    }
+    if (latestDraft.pinned !== created.pinned) {
+      created = await notes.setPinned(created, latestDraft.pinned);
+    }
+
+    noteDraft = null;
+    selectedNoteUuid = created.uuid;
+    return created;
+  }
+
+  async function flushAllNoteChanges() {
+    if (noteDraftSaveTimer) {
+      clearTimeout(noteDraftSaveTimer);
+      noteDraftSaveTimer = null;
+    }
+    if (noteDraftCreatePromise) {
+      await noteDraftCreatePromise;
+    } else if (noteDraft && hasNoteDraftContent(noteDraft)) {
+      await persistNoteDraft();
+    }
+    await notes.flushPending();
+  }
+
+  function discardNoteDraft() {
+    if (noteDraftSaveTimer) clearTimeout(noteDraftSaveTimer);
+    noteDraftSaveTimer = null;
+    noteDraft = null;
+  }
+
+  async function undoNoteDelete() {
+    if (!deletedNote) return;
+    const note = deletedNote;
+    deletedNote = null;
+    if (noteUndoTimer) clearTimeout(noteUndoTimer);
+    noteUndoTimer = null;
+    await notes.restore(note);
+  }
+
+  function setDefaultListViewMode(mode: DefaultListViewMode) {
+    defaultListViewMode = mode;
+    localStorage.setItem(DEFAULT_LIST_VIEW_KEY, mode);
+    if (mode !== "remember") {
+      setListView(mode);
+    }
+  }
+
+  function setSelectedGroup(group: string) {
+    selectedGroup = group;
+    localStorage.setItem("eggdone-selected-group", group);
+    managingGroup = false;
+    confirmingGroupDelete = false;
+    selectedTodoId = null;
+    clearBatchSelection();
+    cancelDrag();
+    requestAnimationFrame(() => revealSelectedGroup(group));
+  }
+
+  function selectGroupFromScroll(group: string) {
+    if (suppressGroupClick) return;
+    setSelectedGroup(group);
+  }
+
+  function revealSelectedGroup(group: string, smooth = true) {
+    if (!groupScrollElement) return;
+    const buttons = groupScrollElement.querySelectorAll<HTMLButtonElement>(
+      "[data-group-filter]",
+    );
+    const selectedButton = [...buttons].find(
+      (button) => button.dataset.groupFilter === group,
+    );
+    selectedButton?.scrollIntoView({
+      behavior: smooth ? "smooth" : "auto",
+      block: "nearest",
+      inline: "nearest",
+    });
+  }
+
+  function updateGroupScrollState() {
+    if (!groupScrollElement) return;
+    const maxScrollLeft =
+      groupScrollElement.scrollWidth - groupScrollElement.clientWidth;
+    groupScrollOverflowing = maxScrollLeft > 2;
+    groupScrollCanMoveLeft = groupScrollElement.scrollLeft > 2;
+    groupScrollCanMoveRight =
+      groupScrollElement.scrollLeft < maxScrollLeft - 2;
+  }
+
+  function scrollGroups(direction: -1 | 1) {
+    groupScrollElement.scrollBy({
+      left: direction * Math.max(120, groupScrollElement.clientWidth * 0.7),
+      behavior: "smooth",
+    });
+  }
+
+  function handleGroupScrollWheel(event: WheelEvent) {
+    if (!groupScrollOverflowing) return;
+    const delta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+        ? event.deltaX
+        : event.deltaY;
+    if (delta === 0) return;
+    event.preventDefault();
+    groupScrollElement.scrollLeft += delta;
+  }
+
+  function handleGroupScrollPointerDown(event: PointerEvent) {
+    if (event.button !== 0 || !groupScrollOverflowing) return;
+    groupScrollPointerId = event.pointerId;
+    groupScrollStartX = event.clientX;
+    groupScrollStartLeft = groupScrollElement.scrollLeft;
+    groupScrollDragging = false;
+    suppressGroupClick = false;
+  }
+
+  function handleGroupScrollPointerMove(event: PointerEvent) {
+    if (event.pointerId !== groupScrollPointerId) return;
+    const distance = event.clientX - groupScrollStartX;
+    if (!groupScrollDragging && Math.abs(distance) < 5) return;
+    if (!groupScrollDragging) {
+      groupScrollElement.setPointerCapture(event.pointerId);
+    }
+    groupScrollDragging = true;
+    suppressGroupClick = true;
+    event.preventDefault();
+    groupScrollElement.scrollLeft = groupScrollStartLeft - distance;
+  }
+
+  function handleGroupScrollPointerLeave(event: PointerEvent) {
+    if (
+      event.pointerId === groupScrollPointerId &&
+      !groupScrollDragging
+    ) {
+      groupScrollPointerId = null;
+    }
+  }
+
+  function handleGroupScrollPointerUp(event: PointerEvent) {
+    if (event.pointerId !== groupScrollPointerId) return;
+    if (groupScrollElement.hasPointerCapture(event.pointerId)) {
+      groupScrollElement.releasePointerCapture(event.pointerId);
+    }
+    groupScrollPointerId = null;
+    groupScrollDragging = false;
+    if (suppressGroupClick) {
+      setTimeout(() => {
+        suppressGroupClick = false;
+      }, 0);
+    }
+  }
+
+  async function focusTodoByUuid(uuid: string) {
+    showAbout = false;
+    showDataManager = false;
+    showSettings = false;
+    showSearch = false;
+    searchQuery = "";
+    showCompleted = true;
+    localStorage.setItem("eggdone-show-completed", "true");
+    setListView("all");
+    setSelectedGroup("all");
+
+    await tick();
+    let todo = $todos.items.find((item) => item.uuid === uuid);
+    if (!todo) {
+      await todos.refresh();
+      await tick();
+      todo = $todos.items.find((item) => item.uuid === uuid);
+    }
+    if (!todo) {
+      inputElement?.focus();
+      return;
+    }
+
+    selectedTodoId = todo.id;
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-todo-id="${todo.id}"]`)
+        ?.scrollIntoView({ block: "center" });
+      inputElement?.focus();
+    });
+  }
+
+  function groupFilterValue(group: string) {
+    if (group === "all") return undefined;
+    if (group === "ungrouped") return null;
+    return group;
+  }
+
+  function newTodoGroupUuid() {
+    return selectedGroup === "all" || selectedGroup === "ungrouped"
+      ? null
+      : selectedGroup;
+  }
+
+  function groupUuidByName(name: string | null) {
+    if (name === null) return null;
+    return $todos.groups.find((group) => group.name === name)?.uuid ?? null;
+  }
+
+  function groupLabel(group: string, groups: TodoGroup[]) {
+    if (group === "all") return $translator("nav.all");
+    if (group === "ungrouped") return $translator("todo.noGroup");
+    return groups.find((item) => item.uuid === group)?.name ?? $translator("todo.group");
+  }
+
+  function groupColorValue(color: string): GroupColor {
+    return groupColorOptions.some((option) => option.value === color)
+      ? (color as GroupColor)
+      : "yellow";
+  }
+
+  function markPanelInteraction(event: PointerEvent) {
+    selectTodoFromPointer(event);
+    if (isTauri()) {
+      void todoApi.markPanelInteraction().catch(() => {});
+    }
+  }
+
+  function applyTheme(nextTheme: Theme) {
+    document.documentElement.dataset.theme = nextTheme;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute("content", nextTheme === "dark" ? "#1d1b18" : "#f6c94c");
+  }
+
+  function footerSyncLabel(
+    kind: import("$lib/sync/autoSync").SyncStatusKind,
+  ) {
+    if (kind === "syncing") return $translator("sync.syncing");
+    if (kind === "synced") return $translator("sync.synced");
+    if (kind === "offline") return $translator("sync.offline");
+    if (kind === "conflict") return $translator("sync.conflict");
+    if (kind === "failed") return $translator("sync.failed");
+    return $translator("sync.notSynced");
+  }
+
+  function footerSyncTitle(
+    kind: import("$lib/sync/autoSync").SyncStatusKind,
+  ) {
+    if (kind === "offline") return $translator("sync.offlineAdvice");
+    if (kind === "conflict") return $translator("sync.conflictAdvice");
+    if (kind === "failed") return $translator("sync.retryAdvice");
+    return footerSyncLabel(kind);
+  }
+
+  function openFocusPanel() {
+    clearFocusTarget();
+    focusTarget = null;
+    showAbout = false;
+    showDataManager = false;
+    showSettings = false;
+    openFocusSurface();
+  }
+
+  function openFocusForTodo(todo: Todo) {
+    focusTarget = { uuid: todo.uuid, title: todo.title };
+    saveFocusTarget(focusTarget);
+    showAbout = false;
+    showDataManager = false;
+    showSettings = false;
+    openFocusSurface();
+  }
+
+  function openFocusSurface() {
+    if (isTauri()) {
+      void todoApi.openFocusWindow().catch((error) => {
+        todos.reportError(error);
+        showFocus = true;
+      });
+      return;
+    }
+    showFocus = true;
+  }
+
+  function refreshFocusDurations() {
+    const previous = focusDurations;
+    const next = getFocusDurations();
+    focusDurations = next;
+    if (
+      !focusRunning &&
+      focusEndsAt === null &&
+      focusRemainingMs === previous[focusPhase]
+    ) {
+      focusRemainingMs = next[focusPhase];
+    }
+  }
+
+  function startFocusSession(phase: FocusPhase = "focus") {
+    clearFocusCompletionTimer();
+    focusCompletionVisible = false;
+    refreshFocusDurations();
+    focusPhase = phase;
+    focusRemainingMs = focusDurations[phase];
+    focusEndsAt = Date.now() + focusRemainingMs;
+    focusRunning = true;
+    updateFocusTrayTooltip();
+  }
+
+  function updateFocusTimer() {
+    if (!focusRunning || focusEndsAt === null) return;
+    focusRemainingMs = Math.max(0, focusEndsAt - Date.now());
+    updateFocusTrayTooltip();
+    if (focusRemainingMs > 0) return;
+    const completedPhase = focusPhase;
+    focusRunning = false;
+    focusEndsAt = null;
+    focusRemainingMs = 0;
+    focusCompletionVisible = true;
+    updateFocusTrayTooltip();
+    if (isTauri()) {
+      void todoApi.publishFocusNotification(completedPhase).catch(() => {});
+    }
+    scheduleNextFocusPhase(completedPhase);
+  }
+
+  function toggleFocusRunning() {
+    if (focusCompletionVisible) return;
+    if (focusRunning) {
+      updateFocusTimer();
+      focusRunning = false;
+      focusEndsAt = null;
+      return;
+    }
+    focusEndsAt = Date.now() + focusRemainingMs;
+    focusRunning = true;
+  }
+
+  function addFocusFiveMinutes() {
+    if (focusCompletionVisible) return;
+    focusRemainingMs += 5 * 60 * 1000;
+    if (focusRunning) {
+      focusEndsAt = Date.now() + focusRemainingMs;
+    }
+  }
+
+  function skipFocusPhase() {
+    clearFocusCompletionTimer();
+    focusCompletionVisible = false;
+    startFocusSession(focusPhase === "focus" ? "break" : "focus");
+  }
+
+  function endFocusSession() {
+    clearFocusCompletionTimer();
+    focusCompletionVisible = false;
+    focusRunning = false;
+    focusPhase = "focus";
+    focusEndsAt = null;
+    focusRemainingMs = focusDurations.focus;
+    clearFocusTarget();
+    focusTarget = null;
+    showFocus = false;
+    if (isTauri()) {
+      void todoApi.restoreTrayTaskTooltip().catch(() => {});
+    }
+  }
+
+  async function completeFocusTarget() {
+    if (!focusTarget || completingFocusTarget) return;
+    const targetTodo = $todos.items.find((todo) => todo.uuid === focusTarget?.uuid);
+    if (!targetTodo || targetTodo.completed) {
+      endFocusSession();
+      return;
+    }
+    completingFocusTarget = true;
+    try {
+      await todos.toggle(targetTodo);
+      endFocusSession();
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      completingFocusTarget = false;
+    }
+  }
+
+  function scheduleNextFocusPhase(completedPhase: FocusPhase) {
+    clearFocusCompletionTimer();
+    focusCompletionTimer = window.setTimeout(() => {
+      focusCompletionTimer = null;
+      if (!focusCompletionVisible || focusRunning) return;
+      focusCompletionVisible = false;
+      focusPhase = completedPhase === "focus" ? "break" : "focus";
+      focusRemainingMs = focusDurations[focusPhase];
+      updateFocusTrayTooltip();
+    }, 1800);
+  }
+
+  function clearFocusCompletionTimer() {
+    if (focusCompletionTimer === null) return;
+    window.clearTimeout(focusCompletionTimer);
+    focusCompletionTimer = null;
+  }
+
+  function formatFocusTime(milliseconds: number) {
+    const totalSeconds = Math.ceil(milliseconds / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  function updateFocusTrayTooltip() {
+    if (!isTauri()) return;
+    void todoApi
+      .updateFocusTrayTooltip(
+        focusPhase,
+        Math.max(0, Math.ceil(focusRemainingMs)),
+        focusTarget?.title ?? null,
+      )
+      .catch(() => {});
+  }
+
+  async function addTodo() {
+    const nextTitle = title.trim();
+    if (!nextTitle || adding) return;
+    const parsed = quickAddPreview ?? {
+      title: nextTitle,
+      schedule: null,
+      label: "",
+      groupName: null,
+      priority: 0,
+    };
+    const groupUuid = groupUuidByName(parsed.groupName) ?? newTodoGroupUuid();
+
+    adding = true;
+    try {
+      const created = await todos.add(parsed.title, groupUuid);
+      if (parsed.schedule) {
+        await todos.setSchedule(created.id, parsed.schedule);
+      }
+      if (parsed.priority === 1) {
+        await todos.setPriority(created, 1);
+      }
+      title = "";
+      quickAddParsingDisabledFor = "";
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      adding = false;
+      inputElement?.focus();
+    }
+  }
+
+ async function toggleTodo(todo: Todo) {
+    try {
+        await todos.toggle(todo);
+        // 强制刷新日历视图：通过切换视图来重新渲染
+        if (listView === 'calendar') {
+            const currentView = listView;
+            // 先切换到其他视图
+            listView = 'all';
+            // 等待一个微任务，让 Svelte 完成更新
+            await tick();
+            // 再切回日历视图
+            listView = currentView;
+        }
+    } catch (error) {
+        todos.reportError(error);
+    }
+}
+  async function editTodo(
+    id: number,
+    nextTitle: string,
+    repeatScope: RepeatEditScope = "single",
+  ) {
+    try {
+      await todos.edit(id, nextTitle, repeatScope);
+    } catch (error) {
+      todos.reportError(error);
+      throw error;
+    }
+  }
+
+  async function noteTodo(
+    id: number,
+    note: string | null,
+    repeatScope: RepeatEditScope = "single",
+  ) {
+    try {
+      await todos.setNote(id, note, repeatScope);
+    } catch (error) {
+      todos.reportError(error);
+      throw error;
+    }
+  }
+
+  async function pinTodo(todo: Todo, pinned: boolean) {
+    try {
+      await todos.setPinned(todo, pinned);
+    } catch (error) {
+      todos.reportError(error);
+    }
+  }
+
+  async function priorityTodo(todo: Todo, priority: number) {
+    try {
+      await todos.setPriority(todo, priority);
+    } catch (error) {
+      todos.reportError(error);
+    }
+  }
+
+  function isUrgentTodo(todo: Todo) {
+    return isDueTodayOrOverdue(todo);
+  }
+
+  function quadrantKey(todo: Todo): QuadrantKey {
+    const important = todo.priority === 1;
+    const urgent = isUrgentTodo(todo);
+    if (important && urgent) return "importantUrgent";
+    if (important) return "importantNotUrgent";
+    if (urgent) return "normalUrgent";
+    return "normalNotUrgent";
+  }
+
+  function quadrantTodos(key: QuadrantKey) {
+    return renderedTodos.filter((todo) => quadrantKey(todo) === key);
+  }
+
+  function quadrantCount(key: QuadrantKey) {
+    return filteredTodos.filter((todo) => quadrantKey(todo) === key).length;
+  }
+
+  function agendaKey(todo: Todo, now = new Date()): AgendaKey {
+    const dueDate = todoAgendaDate(todo);
+    if (dueDate === null) return "unscheduled";
+
+    const today = localDateString(0, now);
+    if (!todo.completed && todo.due_at !== null && todo.due_at < now.getTime()) {
+      return "overdue";
+    }
+    if (!todo.completed && todo.due_date !== null && todo.due_date < today) {
+      return "overdue";
+    }
+    if (dueDate === today) return "today";
+    if (dueDate === localDateString(1, now)) return "tomorrow";
+    if (dueDate <= localDateString(6, now)) return "week";
+    return "later";
+  }
+
+  function agendaTodos(key: AgendaKey) {
+    return renderedTodos.filter((todo) => agendaKey(todo) === key);
+  }
+
+  function agendaDateTodos(date: string) {
+    return renderedTodos.filter((todo) => todoAgendaDate(todo) === date);
+  }
+
+  function startOfAgendaWeek(value = Date.now()) {
+    const date = new Date(value);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - date.getDay());
+    return date.getTime();
+  }
+
+  function agendaWeekDays(now = new Date(agendaWeekStartAt)) {
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(now);
+      date.setDate(now.getDate() + index);
+      const dateKey = localDateString(0, date);
+      return {
+        dateKey,
+        day: String(date.getDate()),
+        label: agendaDayLabel(dateKey, date),
+        count: renderedTodos.filter((todo) => todoAgendaDate(todo) === dateKey)
+          .length,
+      };
+    });
+  }
+
+  function agendaDayLabel(dateKey: string, date: Date) {
+    if (dateKey === localDateString(0)) return $translator("todo.today");
+    if (dateKey === localDateString(1)) return $translator("todo.tomorrow");
+    return new Intl.DateTimeFormat($languageState.resolvedLocale, { weekday: "short" }).format(date);
+  }
+
+  function selectedAgendaLabel() {
+    const dateKey = selectedAgendaDate ?? localDateString(0);
+    if (dateKey === localDateString(0)) return $translator("todo.today");
+    if (dateKey === localDateString(1)) return $translator("todo.tomorrow");
+    return dateKey.slice(5).replace("-", "/");
+  }
+
+  function selectAgendaDate(dateKey: string) {
+    selectedAgendaDate = dateKey;
+    agendaDatePickerOpen = false;
+  }
+
+  function shiftAgendaWeek(offsetDays: number) {
+    const date = new Date(startOfAgendaWeek(agendaWeekStartAt));
+    date.setDate(date.getDate() + offsetDays);
+    agendaWeekStartAt = date.getTime();
+    selectedAgendaDate = localDateString(0, date);
+    agendaWeekVersion += 1;
+    agendaDatePickerOpen = false;
+  }
+
+  function jumpAgendaToday() {
+    agendaWeekStartAt = startOfAgendaWeek();
+    selectedAgendaDate = localDateString(0);
+    agendaWeekVersion += 1;
+    agendaDatePickerOpen = false;
+  }
+
+  function setAgendaDateFromPicker(dateKey: string) {
+    if (!dateKey) return;
+    selectedAgendaDate = dateKey;
+    agendaWeekStartAt = startOfAgendaWeek(
+      new Date(`${dateKey}T00:00:00`).getTime(),
+    );
+    agendaWeekVersion += 1;
+    agendaDatePickerOpen = false;
+  }
+
+  function todoAgendaDate(todo: Todo): string | null {
+    if (todo.due_date !== null) return todo.due_date;
+    if (todo.due_at !== null) return localDateString(0, new Date(todo.due_at));
+    return null;
+  }
+
+  function selectTodo(id: number) {
+    selectedTodoId = id;
+  }
+
+  function selectTodoFromPointer(event: PointerEvent) {
+    if (event.button !== 0) return;
+    if (!(event.target instanceof HTMLElement)) return;
+    const item = event.target.closest<HTMLElement>("[data-todo-id]");
+    const id = Number(item?.dataset.todoId);
+    if (Number.isFinite(id)) selectedTodoId = id;
+  }
+
+  function moveKeyboardSelection(direction: -1 | 1) {
+    if (renderedTodos.length === 0) return;
+    const currentIndex = renderedTodos.findIndex(
+      (todo) => todo.id === selectedTodoId,
+    );
+    const nextIndex =
+      currentIndex === -1
+        ? direction > 0
+          ? 0
+          : renderedTodos.length - 1
+        : Math.min(
+            Math.max(currentIndex + direction, 0),
+            renderedTodos.length - 1,
+          );
+    selectedTodoId = renderedTodos[nextIndex].id;
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-todo-id="${selectedTodoId}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function requestEditSelectedTodo() {
+    if (selectedTodoId === null) return;
+    editRequestTodoId = selectedTodoId;
+    editRequestSeq += 1;
+  }
+
+  function handlePanelKeydown(event: KeyboardEvent) {
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLocaleLowerCase() === "n") {
+      event.preventDefault();
+      setListView("notes");
+      void createNote();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f") {
+      event.preventDefault();
+      if (selectedNote) {
+        void closeNoteEditor().then(() => toggleSearch());
+      } else {
+        void toggleSearch();
+      }
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "s" && selectedNote) {
+      event.preventDefault();
+      void flushAllNoteChanges();
+      return;
+    }
+    if (shouldIgnoreKeyboardNavigation(event)) return;
+    if (event.key === "ArrowDown" || event.key === "j") {
+      event.preventDefault();
+      moveKeyboardSelection(1);
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "k") {
+      event.preventDefault();
+      moveKeyboardSelection(-1);
+      return;
+    }
+    if (event.key === " ") {
+      if (selectedTodoId === null) return;
+      const todo = renderedTodos.find((item) => item.id === selectedTodoId);
+      if (!todo) return;
+      event.preventDefault();
+      void toggleTodo(todo);
+      return;
+    }
+    if (event.key === "Enter") {
+      if (selectedTodoId === null) return;
+      event.preventDefault();
+      requestEditSelectedTodo();
+      return;
+    }
+    if (event.key === "Escape" && selectedTodoId !== null) {
+      selectedTodoId = null;
+    }
+  }
+
+  function shouldIgnoreKeyboardNavigation(event: KeyboardEvent) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return true;
+    if (
+      showAbout ||
+      showDataManager ||
+      showSettings ||
+      managingGroup ||
+      creatingGroup ||
+      draggedTodo
+    ) {
+      return true;
+    }
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName.toLowerCase();
+    return (
+      tag === "input" ||
+      tag === "textarea" ||
+      tag === "select" ||
+      target.isContentEditable
+    );
+  }
+
+  function toggleBatchMode() {
+    batchMode = !batchMode;
+    summaryMenuOpen = false;
+    clearBatchSelection();
+    if (batchMode) {
+      showAbout = false;
+      showDataManager = false;
+      showSettings = false;
+    }
+  }
+
+  function clearBatchSelection() {
+    batchSelectedIds = new Set();
+  }
+
+  function toggleBatchTodo(todo: Todo, selected: boolean) {
+    const nextIds = new Set(batchSelectedIds);
+    if (selected) {
+      nextIds.add(todo.id);
+    } else {
+      nextIds.delete(todo.id);
+    }
+    batchSelectedIds = nextIds;
+  }
+
+  function selectAllRenderedTodos() {
+    batchSelectedIds = new Set(renderedTodos.map((todo) => todo.id));
+  }
+
+  function selectedBatchIds() {
+    return batchSelectedTodos.map((todo) => todo.id);
+  }
+
+  async function createGroup() {
+    const nextName = groupName.trim();
+    if (!nextName || groupSaving) return;
+    groupSaving = true;
+    try {
+      const group = await todos.addGroup(nextName);
+      groupName = "";
+      creatingGroup = false;
+      setSelectedGroup(group.uuid);
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      groupSaving = false;
+    }
+  }
+
+  function disableQuickAddParsing() {
+    quickAddParsingDisabledFor = title;
+    inputElement?.focus();
+  }
+
+  function openGroupManager() {
+    if (!selectedGroupObject) return;
+    managingGroup = true;
+    editingGroupName = selectedGroupObject.name;
+    confirmingGroupDelete = false;
+  }
+
+  async function renameSelectedGroup() {
+    if (!selectedGroupObject || groupSaving) return;
+    const nextName = editingGroupName.trim();
+    if (!nextName || nextName === selectedGroupObject.name) return;
+
+    groupSaving = true;
+    try {
+      await todos.renameGroup(selectedGroupObject.uuid, nextName);
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      groupSaving = false;
+    }
+  }
+
+  async function updateSelectedGroupColor(color: GroupColor) {
+    if (!selectedGroupObject || groupSaving || groupDeleting) return;
+    if (groupColorValue(selectedGroupObject.color) === color) return;
+
+    groupSaving = true;
+    try {
+      await todos.updateGroupColor(selectedGroupObject.uuid, color);
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      groupSaving = false;
+    }
+  }
+
+  async function deleteSelectedGroup() {
+    if (!selectedGroupObject || groupDeleting) return;
+    if (!confirmingGroupDelete) {
+      confirmingGroupDelete = true;
+      if (groupDeleteTimer) clearTimeout(groupDeleteTimer);
+      groupDeleteTimer = setTimeout(() => {
+        confirmingGroupDelete = false;
+        groupDeleteTimer = null;
+      }, 3000);
+      return;
+    }
+
+    groupDeleting = true;
+    try {
+      await todos.deleteGroup(selectedGroupObject.uuid);
+      setSelectedGroup("all");
+      managingGroup = false;
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      groupDeleting = false;
+      confirmingGroupDelete = false;
+    }
+  }
+
+  async function moveSelectedGroup(direction: -1 | 1) {
+    if (!selectedGroupObject || groupSaving) return;
+    const nextIndex = selectedGroupIndex + direction;
+    if (selectedGroupIndex < 0 || nextIndex < 0 || nextIndex >= $todos.groups.length) {
+      return;
+    }
+    const groups = [...$todos.groups];
+    [groups[selectedGroupIndex], groups[nextIndex]] = [
+      groups[nextIndex],
+      groups[selectedGroupIndex],
+    ];
+    groupSaving = true;
+    try {
+      await todos.reorderGroups(groups.map((group) => group.uuid));
+    } catch {
+      // The store restores the previous group order and exposes the error.
+    } finally {
+      groupSaving = false;
+    }
+  }
+
+  async function moveTodoToGroup(
+    todo: Todo,
+    groupUuid: string | null,
+    repeatScope: RepeatEditScope = "single",
+  ) {
+    try {
+      await todos.setGroup(todo, groupUuid, repeatScope);
+    } catch (error) {
+      todos.reportError(error);
+      throw error;
+    }
+  }
+
+  async function scheduleTodo(
+    id: number,
+    schedule: TodoScheduleInput,
+    repeatScope: RepeatEditScope = "single",
+  ) {
+    try {
+      await todos.setSchedule(id, schedule, repeatScope);
+    } catch (error) {
+      todos.reportError(error);
+      throw error;
+    }
+  }
+
+  async function snoozeTodo(todo: Todo, reminderAt: number) {
+    try {
+      await todos.setSchedule(todo.id, {
+        due_date: todo.due_date,
+        due_at: todo.due_at,
+        reminder_at: reminderAt,
+        repeat_rule: todo.repeat_rule,
+      });
+    } catch (error) {
+      todos.reportError(error);
+      throw error;
+    }
+  }
+
+async function deleteTodo(
+    id: number,
+    repeatScope: RepeatDeleteScope = "single",
+) {
+    try {
+        undoTodos = await todos.remove(id, repeatScope);
+        if (undoTimer) clearTimeout(undoTimer);
+        undoTimer = setTimeout(() => {
+            undoTodos = [];
+            undoTimer = null;
+        }, 5000);
+        
+        // ⭐ 新增：删除任务后强制刷新日历视图
+        if (listView === 'calendar') {
+            const currentView = listView;
+            listView = 'all';
+            await tick(); // 需要确保已经导入 tick
+            listView = currentView;
+        }
+    } catch (error) {
+        todos.reportError(error);
+    }
+}
+
+  async function undoDelete() {
+    if (undoTodos.length === 0) return;
+    const todosToRestore = undoTodos;
+    undoTodos = [];
+    if (undoTimer) {
+      clearTimeout(undoTimer);
+      undoTimer = null;
+    }
+    try {
+      for (const todo of todosToRestore) {
+        await todos.restore(todo.id);
+      }
+    } catch (error) {
+      undoTodos = todosToRestore;
+      todos.reportError(error);
+    }
+  }
+
+  function requestClearCompleted() {
+    if (confirmingClear) {
+      void clearCompleted();
+      return;
+    }
+    confirmingClear = true;
+    if (clearTimer) clearTimeout(clearTimer);
+    clearTimer = setTimeout(() => {
+      confirmingClear = false;
+      clearTimer = null;
+    }, 3000);
+  }
+
+  async function clearCompleted() {
+    summaryMenuOpen = false;
+    confirmingClear = false;
+    if (clearTimer) {
+      clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+    try {
+      await todos.clearCompleted();
+    } catch (error) {
+      todos.reportError(error);
+    }
+  }
+
+  async function archiveCompleted() {
+    summaryMenuOpen = false;
+    try {
+      await todos.archiveCompleted();
+    } catch (error) {
+      todos.reportError(error);
+    }
+  }
+
+  async function completeSelectedTodos() {
+    if (batchBusy || batchIncompleteSelectedCount === 0) return;
+    batchBusy = true;
+    try {
+      await todos.completeMany(selectedBatchIds());
+      clearBatchSelection();
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      batchBusy = false;
+    }
+  }
+
+  async function moveSelectedTodos(groupUuid: string | null) {
+    if (batchBusy || batchSelectionCount === 0) return;
+    batchBusy = true;
+    try {
+      await todos.moveManyToGroup(selectedBatchIds(), groupUuid);
+      clearBatchSelection();
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      batchBusy = false;
+    }
+  }
+
+  async function deleteSelectedTodos() {
+    if (batchBusy || batchSelectionCount === 0) return;
+    batchBusy = true;
+    try {
+      undoTodos = await todos.removeMany(selectedBatchIds());
+      clearBatchSelection();
+      if (undoTimer) clearTimeout(undoTimer);
+      undoTimer = setTimeout(() => {
+        undoTodos = [];
+        undoTimer = null;
+      }, 5000);
+    } catch (error) {
+      todos.reportError(error);
+    } finally {
+      batchBusy = false;
+    }
+  }
+
+  function startDrag(todo: Todo, event: PointerEvent) {
+    if (batchMode) return;
+    if (reorderDisabled && !canDragTodoToGroup(todo)) return;
+    cancelDrag();
+    draggedTodo = todo;
+    dragPointerId = event.pointerId;
+    dragGroupTarget = undefined;
+    previewOrderIds = reorderDisabled
+      ? null
+      : $todos.items
+          .filter(
+            (item) =>
+              item.completed === todo.completed && item.pinned === todo.pinned,
+          )
+          .map((item) => item.id);
+    window.addEventListener("pointermove", moveDrag, true);
+    window.addEventListener("pointerup", endDrag, true);
+    window.addEventListener("pointercancel", cancelDrag, true);
+  }
+
+  function moveDrag(event: PointerEvent) {
+    if (!draggedTodo || event.pointerId !== dragPointerId) return;
+    event.preventDefault();
+    dragGroupTarget = findGroupDropTarget(event.clientX, event.clientY);
+    if (dragGroupTarget !== undefined) return;
+    if (reorderDisabled) return;
+    updateDragTarget(event.clientY);
+  }
+
+  function updateDragTarget(clientY: number) {
+    if (!draggedTodo) return;
+    const source = draggedTodo;
+    if (!previewOrderIds) return;
+
+    const rowCenters = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-todo-id]"),
+    )
+      .map((element) => {
+        const todo = renderedTodos.find(
+          (item) => item.id === Number(element.dataset.todoId),
+        );
+        const rect = element.getBoundingClientRect();
+        return todo &&
+          todo.completed === source.completed &&
+          todo.pinned === source.pinned
+          ? { id: todo.id, centerY: rect.top + rect.height / 2 }
+          : null;
+      })
+      .filter(
+        (row): row is { id: number; centerY: number } => row !== null,
+      );
+
+    const nextOrder = movePreviewByPointer(
+      previewOrderIds,
+      source.id,
+      clientY,
+      rowCenters,
+    );
+    if (nextOrder === previewOrderIds) return;
+
+    previewOrderIds = nextOrder;
+  }
+
+  async function endDrag(event: PointerEvent) {
+    if (!draggedTodo || event.pointerId !== dragPointerId) return;
+    event.preventDefault();
+    const groupTarget = findGroupDropTarget(event.clientX, event.clientY);
+    if (groupTarget !== undefined) {
+      const todo = draggedTodo;
+      removeDragListeners();
+      resetDragState();
+      try {
+        await todos.setGroup(todo, groupTarget);
+      } catch (error) {
+        todos.reportError(error);
+      }
+      return;
+    }
+
+    if (!reorderDisabled) {
+      updateDragTarget(event.clientY);
+    }
+    const orderedIds = previewOrderIds;
+    const sourceCompleted = draggedTodo.completed;
+    const sourcePinned = draggedTodo.pinned;
+    removeDragListeners();
+    if (!orderedIds) {
+      resetDragState();
+      return;
+    }
+
+    const currentIds = $todos.items
+      .filter(
+        (todo) =>
+          todo.completed === sourceCompleted && todo.pinned === sourcePinned,
+      )
+      .map((todo) => todo.id);
+    if (orderedIds.every((id, index) => id === currentIds[index])) {
+      resetDragState();
+      return;
+    }
+
+    const persistence = todos.reorder(orderedIds);
+    resetDragState();
+    try {
+      await persistence;
+    } catch {
+      // The store restores the previous order and exposes the error.
+    }
+  }
+
+  async function moveTodo(todo: Todo, direction: -1 | 1) {
+    if (reorderDisabled) return;
+    const group = $todos.items.filter(
+      (item) =>
+        item.completed === todo.completed && item.pinned === todo.pinned,
+    );
+    const currentIndex = group.findIndex((item) => item.id === todo.id);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= group.length) return;
+
+    const reordered = [...group];
+    [reordered[currentIndex], reordered[nextIndex]] = [
+      reordered[nextIndex],
+      reordered[currentIndex],
+    ];
+    try {
+      await todos.reorder(reordered.map((item) => item.id));
+    } catch {
+      // The store restores the previous order and exposes the error.
+    }
+  }
+
+  function cancelDrag() {
+    removeDragListeners();
+    resetDragState();
+  }
+
+  function removeDragListeners() {
+    window.removeEventListener("pointermove", moveDrag, true);
+    window.removeEventListener("pointerup", endDrag, true);
+    window.removeEventListener("pointercancel", cancelDrag, true);
+  }
+
+  function resetDragState() {
+    draggedTodo = null;
+    dragPointerId = null;
+    previewOrderIds = null;
+    dragGroupTarget = undefined;
+  }
+
+  function canDragTodoToGroup(todo: Todo) {
+    return $todos.groups.length > 0 || todo.group_uuid !== null;
+  }
+
+  function findGroupDropTarget(clientX: number, clientY: number): GroupDropTarget | undefined {
+    if (!draggedTodo) return undefined;
+    const target = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-group-drop-target]"),
+    ).find((element) => {
+      const rect = element.getBoundingClientRect();
+      return (
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom
+      );
+    });
+    if (!target) return undefined;
+
+    const value = target.dataset.groupDropTarget;
+    if (!value) return undefined;
+    const groupUuid = value === "ungrouped" ? null : value;
+    return groupUuid === draggedTodo.group_uuid ? undefined : groupUuid;
+  }
+
+  function applyPreviewOrder(items: Todo[], orderedIds: number[] | null) {
+    if (!orderedIds) return items;
+
+    const order = new Map(orderedIds.map((id, index) => [id, index]));
+    const reorderedGroup = items
+      .filter((item) => order.has(item.id))
+      .sort((left, right) => order.get(left.id)! - order.get(right.id)!);
+    let groupIndex = 0;
+    return items.map((item) =>
+      order.has(item.id) ? reorderedGroup[groupIndex++] : item,
+    );
+  }
+</script>
+
+<svelte:window
+  onpointerdown={markPanelInteraction}
+  onkeydown={handlePanelKeydown}
+/>
+
+<main class="panel-shell">
+  <header class="panel-header">
+    <div class="brand">
+      <img class="mascot" src="/eggdone-icon.png" alt="" aria-hidden="true" />
+      <div>
+        <h1>{$translator("app.name")}</h1>
+        <p>{$translator("app.companionTagline")}</p>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button
+        class="focus-button"
+        type="button"
+        aria-label={$translator("nav.focus")}
+        title={$translator("nav.focus")}
+        onclick={openFocusPanel}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.2" />
+          <path d="M10 6.4v3.8l2.4 1.4" />
+        </svg>
+      </button>
+
+      <button
+        class="settings-button"
+        type="button"
+        aria-label={$translator("nav.settings")}
+        title={$translator("nav.settings")}
+        onclick={() => {
+          showAbout = false;
+          showDataManager = false;
+          showSettings = true;
+        }}
+        disabled={!desktopSettings}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.96 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.96a1.7 1.7 0 0 0-.34-1.88l-.06-.06L7.03 4.2l.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.04V3h4v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.24.6.83 1 1.48 1H21v4h-.08c-.65 0-1.24.4-1.52 1Z" />
+        </svg>
+      </button>
+
+      <button
+        class="data-button"
+        type="button"
+        aria-label={$translator("nav.data")}
+        title={$translator("nav.data")}
+        onclick={() => {
+          showAbout = false;
+          showSettings = false;
+          showDataManager = true;
+        }}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <ellipse cx="10" cy="5" rx="5.5" ry="2.5" />
+          <path d="M4.5 5v5c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5V5M4.5 10v5c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5v-5" />
+        </svg>
+      </button>
+
+      <button
+        class="theme-button"
+        type="button"
+        aria-label={theme === "light" ? $translator("settings.switchDark") : $translator("settings.switchLight")}
+        title={theme === "light" ? $translator("settings.switchDark") : $translator("settings.switchLight")}
+        onclick={toggleTheme}
+      >
+        {#if theme === "light"}
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M16.2 12.7A6.4 6.4 0 0 1 7.3 3.8 6.5 6.5 0 1 0 16.2 12.7Z" />
+          </svg>
+        {:else}
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="3.2" />
+            <path d="M10 2v1.5M10 16.5V18M2 10h1.5M16.5 10H18M4.3 4.3l1 1M14.7 14.7l1 1M15.7 4.3l-1 1M5.3 14.7l-1 1" />
+          </svg>
+        {/if}
+      </button>
+
+      <button class="close-button" type="button" aria-label={$translator("common.hidePanel")} title={$translator("common.hidePanel")} onclick={() => todoApi.hidePanel()}>
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m5 5 10 10m0-10L5 15" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  {#if selectedNote === null}
+    {#if listView === "notes"}
+      <button class="quick-add note-quick-add" type="button" onclick={() => void createNote()}>
+        <span>{$translator("note.add")}</span><strong>+</strong>
+      </button>
+    {:else}
+      <form class="quick-add" onsubmit={(event) => { event.preventDefault(); void addTodo(); }}>
+        <input
+          bind:this={inputElement}
+          bind:value={title}
+          maxlength="200"
+          placeholder={$translator("todo.quickPlaceholder", { group: groupLabel(selectedGroup, $todos.groups) })}
+          aria-label={$translator("todo.newTaskContent")}
+          autocomplete="off"
+        />
+        <button type="submit" disabled={!title.trim() || adding} aria-label={$translator("todo.add")}>
+          {adding ? "…" : "+"}
+        </button>
+      </form>
+    {/if}
+  {/if}
+  {#if quickAddPreview && listView !== "notes"}
+    <div class="quick-add-preview" role="status">
+      <span>
+        {$translator("todo.willCreate", { title: quickAddPreview.title })}
+        {#if quickAddPreview.label} · {$translator("todo.dueAt", { time: quickAddPreview.label })}{/if}
+        {#if quickAddPreview.groupName} · {$translator("todo.group")}: {quickAddPreview.groupName}{/if}
+        {#if quickAddPreview.priority === 1} · {$translator("todo.important")}{/if}
+      </span>
+      <button type="button" onclick={disableQuickAddParsing}>{$translator("todo.disableParsing")}</button>
+    </div>
+  {/if}
+
+  {#if listView !== "notes"}
+  <section class="group-filter" aria-label={$translator("group.taskGroups")}>
+    {#if groupScrollOverflowing}
+      <button
+        class="group-scroll-control"
+        type="button"
+        aria-label={$translator("group.scrollLeft")}
+        title={$translator("group.scrollLeft")}
+        disabled={!groupScrollCanMoveLeft}
+        onclick={() => scrollGroups(-1)}
+      >
+        ‹
+      </button>
+    {/if}
+    <div
+      bind:this={groupScrollElement}
+      class="group-scroll"
+      class:overflowing={groupScrollOverflowing}
+      class:dragging={groupScrollDragging}
+      role="group"
+      aria-label={$translator("group.browse")}
+      onscroll={updateGroupScrollState}
+      onwheel={handleGroupScrollWheel}
+      onpointerdown={handleGroupScrollPointerDown}
+      onpointermove={handleGroupScrollPointerMove}
+      onpointerup={handleGroupScrollPointerUp}
+      onpointercancel={handleGroupScrollPointerUp}
+      onpointerleave={handleGroupScrollPointerLeave}
+    >
+      <button
+        class:active={selectedGroup === "all"}
+        data-group-filter="all"
+        type="button"
+        onclick={() => selectGroupFromScroll("all")}
+      >
+        {$translator("nav.all")}
+      </button>
+      <button
+        class:active={selectedGroup === "ungrouped"}
+        class:drag-over={dragGroupTarget === null}
+        data-group-filter="ungrouped"
+        data-group-drop-target="ungrouped"
+        type="button"
+        title={$translator("group.dropUngrouped")}
+        onclick={() => selectGroupFromScroll("ungrouped")}
+      >
+        {$translator("todo.noGroup")}
+      </button>
+      {#each $todos.groups as group (group.uuid)}
+        <button
+          class="group-chip"
+          class:active={selectedGroup === group.uuid}
+          class:drag-over={dragGroupTarget === group.uuid}
+          data-group-color={groupColorValue(group.color)}
+          data-group-filter={group.uuid}
+          data-group-drop-target={group.uuid}
+          type="button"
+          title={$translator("group.dropNamed", { group: group.name })}
+          onclick={() => selectGroupFromScroll(group.uuid)}
+        >
+          <span class="group-dot" aria-hidden="true"></span>
+          {group.name}
+        </button>
+      {/each}
+    </div>
+    {#if groupScrollOverflowing}
+      <button
+        class="group-scroll-control"
+        type="button"
+        aria-label={$translator("group.scrollRight")}
+        title={$translator("group.scrollRight")}
+        disabled={!groupScrollCanMoveRight}
+        onclick={() => scrollGroups(1)}
+      >
+        ›
+      </button>
+    {/if}
+    {#if creatingGroup}
+      <form
+        class="group-create"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void createGroup();
+        }}
+      >
+        <input
+          bind:value={groupName}
+          maxlength="30"
+          placeholder={$translator("group.newPlaceholder")}
+          aria-label={$translator("group.name")}
+          disabled={groupSaving}
+        />
+        <button type="submit" disabled={!groupName.trim() || groupSaving}>
+          {groupSaving ? "…" : $translator("common.save")}
+        </button>
+        <button
+          type="button"
+          disabled={groupSaving}
+          onclick={() => {
+            creatingGroup = false;
+            groupName = "";
+          }}
+        >
+          {$translator("common.cancel")}
+        </button>
+      </form>
+    {:else}
+      {#if selectedGroupObject}
+        <button
+          class="group-manage-toggle"
+          type="button"
+          title={$translator("group.manageCurrent")}
+          onclick={openGroupManager}
+        >
+          {$translator("common.manage")}
+        </button>
+      {/if}
+      <button
+        class="group-add"
+        type="button"
+        title={$translator("group.create")}
+        onclick={() => (creatingGroup = true)}
+      >
+        +
+      </button>
+    {/if}
+  </section>
+  {/if}
+
+  {#if managingGroup && selectedGroupObject}
+    <form
+      class="group-manager"
+      onsubmit={(event) => {
+        event.preventDefault();
+        void renameSelectedGroup();
+      }}
+    >
+      <div class="group-manager-name">
+        <input
+          bind:value={editingGroupName}
+          maxlength="30"
+          aria-label={$translator("group.name")}
+          disabled={groupSaving || groupDeleting}
+        />
+        <button
+          type="submit"
+          disabled={
+            groupSaving ||
+            groupDeleting ||
+            !editingGroupName.trim() ||
+            editingGroupName.trim() === selectedGroupObject.name
+          }
+        >
+          {$translator("common.save")}
+        </button>
+      </div>
+
+      <div class="group-manager-tools">
+        <div class="group-color-options" aria-label={$translator("group.color")}>
+          {#each groupColorOptions as option}
+            <button
+              class="color-swatch"
+              class:active={groupColorValue(selectedGroupObject.color) === option.value}
+              data-group-color={option.value}
+              type="button"
+              title={$translator("group.changeColor", { color: option.label })}
+              disabled={groupSaving || groupDeleting}
+              onclick={() => void updateSelectedGroupColor(option.value)}
+            >
+              <span aria-hidden="true"></span>
+            </button>
+          {/each}
+        </div>
+
+        <div class="group-manager-actions">
+          <button
+            type="button"
+            aria-label={$translator("group.moveUp")}
+            title={$translator("group.moveUp")}
+            disabled={groupSaving || groupDeleting || selectedGroupIndex <= 0}
+            onclick={() => void moveSelectedGroup(-1)}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label={$translator("group.moveDown")}
+            title={$translator("group.moveDown")}
+            disabled={
+              groupSaving ||
+              groupDeleting ||
+              selectedGroupIndex < 0 ||
+              selectedGroupIndex >= $todos.groups.length - 1
+            }
+            onclick={() => void moveSelectedGroup(1)}
+          >
+            ↓
+          </button>
+          <button
+            class:confirming={confirmingGroupDelete}
+            type="button"
+            disabled={groupSaving || groupDeleting}
+            onclick={() => void deleteSelectedGroup()}
+          >
+            {confirmingGroupDelete ? $translator("todo.confirmClear") : $translator("common.delete")}
+          </button>
+          <button
+            type="button"
+            disabled={groupSaving || groupDeleting}
+            onclick={() => {
+              managingGroup = false;
+              confirmingGroupDelete = false;
+            }}
+          >
+            {$translator("common.close")}
+          </button>
+        </div>
+      </div>
+    </form>
+  {/if}
+
+  {#if showSearch && selectedNote === null}
+    <div class="todo-search">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="8.5" cy="8.5" r="4.5" />
+        <path d="m12 12 4 4" />
+      </svg>
+      <input
+        bind:this={searchInput}
+        bind:value={searchQuery}
+        type="search"
+        maxlength="200"
+        placeholder={listView === "notes" ? $translator("nav.notes") : $translator("search.tasks")}
+        aria-label={listView === "notes" ? $translator("nav.notes") : $translator("search.tasks")}
+        autocomplete="off"
+        onkeydown={handleSearchKeydown}
+      />
+      {#if searchQuery}
+        <button
+          type="button"
+          aria-label={$translator("search.clear")}
+          title={$translator("search.clear")}
+          onclick={() => {
+            searchQuery = "";
+            searchInput?.focus();
+          }}
+        >×</button>
+      {/if}
+    </div>
+  {/if}
+
+  {#if selectedNote === null}
+  <section class="summary">
+    <div class="view-switch" aria-label={$translator("group.taskGroups")}>
+      <button
+        class:active={listView === "all"}
+        type="button"
+        aria-pressed={listView === "all"}
+        onclick={() => setListView("all")}
+      >
+        {$translator("nav.all")}
+      </button>
+
+            <button
+        class:active={listView === "calendar"}
+        type="button"
+        aria-pressed={listView === "calendar"}
+        onclick={() => setListView("calendar")}
+      >
+        {$translator("nav.calendar")}
+      </button>
+      
+      <button
+        class:active={listView === "today"}
+        type="button"
+        aria-pressed={listView === "today"}
+        onclick={() => setListView("today")}
+      >
+        {$translator("nav.today")}{todayCount > 0 ? ` ${todayCount}` : ""}
+      </button>
+      <button
+        class:active={listView === "quadrants"}
+        type="button"
+        aria-pressed={listView === "quadrants"}
+        onclick={() => setListView("quadrants")}
+      >
+        {$translator("nav.matrix")}
+      </button>
+
+      <button
+        class:active={listView === "notes"}
+        type="button"
+        aria-pressed={listView === "notes"}
+        onclick={() => setListView("notes")}
+      >
+        {$translator("nav.notes")}
+      </button>
+    </div>
+    <div bind:this={summaryActionsElement} class="summary-actions">
+      <span class="count">{listView === "notes" ? $translator("note.count", { count: $notes.items.length }) : $translator("todo.incompleteCount", { count: $remainingCount })}</span>
+      <button
+        class:active={summaryMenuOpen || showSearch || batchMode}
+        class="summary-menu-button"
+        type="button"
+        aria-label={$translator("search.openMore")}
+        aria-haspopup="menu"
+        aria-expanded={summaryMenuOpen}
+        onclick={() => (summaryMenuOpen = !summaryMenuOpen)}
+      >
+        {$translator("common.more")}
+      </button>
+      {#if summaryMenuOpen}
+        <div class="summary-menu" role="menu">
+          <button
+            class:active={showSearch}
+            type="button"
+            role="menuitem"
+            onclick={() => void toggleSearch()}
+          >
+            {showSearch ? $translator("search.close") : listView === "notes" ? $translator("nav.notes") : $translator("search.tasks")}
+          </button>
+          {#if listView !== "notes" && $completedCount > 0 && listView === "all"}
+            <button
+              class:active={!showCompleted}
+              type="button"
+              role="menuitem"
+              onclick={toggleCompletedVisibility}
+            >
+              {showCompleted ? $translator("todo.hideCompleted") : $translator("todo.showCompleted")}
+            </button>
+          {/if}
+          {#if listView !== "notes" && $completedCount > 0}
+            <button
+              type="button"
+              role="menuitem"
+              onclick={() => void archiveCompleted()}
+            >
+              {$translator("todo.archiveCompleted")}
+            </button>
+            <button
+              class:confirming={confirmingClear}
+              type="button"
+              role="menuitem"
+              onclick={requestClearCompleted}
+            >
+              {confirmingClear ? $translator("todo.confirmClear") : $translator("todo.clearCompleted")}
+            </button>
+          {/if}
+          {#if listView !== "notes" && renderedTodos.length > 0}
+            <button
+              class:active={batchMode}
+              type="button"
+              role="menuitem"
+              onclick={toggleBatchMode}
+            >
+              {batchMode ? $translator("batch.exit") : $translator("batch.actions")}
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </section>
+  {/if}
+
+  {#if listView !== "notes" && batchMode && renderedTodos.length > 0}
+    <section class="batch-toolbar" aria-label={$translator("batch.actions")}>
+      <span>{batchSelectionCount > 0 ? $translator("todo.selectedCount", { count: batchSelectionCount }) : $translator("todo.selectTasks")}</span>
+      <button
+        type="button"
+        disabled={batchBusy || batchSelectionCount === renderedTodos.length}
+        onclick={selectAllRenderedTodos}
+      >
+        {$translator("common.selectAll")}
+      </button>
+      <button
+        type="button"
+        disabled={batchBusy || batchSelectionCount === 0}
+        onclick={clearBatchSelection}
+      >
+        {$translator("common.clear")}
+      </button>
+      <button
+        type="button"
+        disabled={batchBusy || batchIncompleteSelectedCount === 0}
+        onclick={() => void completeSelectedTodos()}
+      >
+        {$translator("common.done")}
+      </button>
+      <label class:placeholder={batchMoveTarget === ""} aria-label={$translator("batch.moveGroup")}>
+        <select
+          bind:value={batchMoveTarget}
+          disabled={batchBusy || batchSelectionCount === 0}
+          onchange={(event) => {
+            const value = event.currentTarget.value;
+            if (!value) return;
+            batchMoveTarget = "";
+            void moveSelectedTodos(value === "ungrouped" ? null : value);
+          }}
+        >
+          <option value="" disabled hidden></option>
+          <option value="ungrouped">{$translator("todo.noGroup")}</option>
+          {#each $todos.groups as group (group.uuid)}
+            <option value={group.uuid}>{group.name}</option>
+          {/each}
+        </select>
+      </label>
+      <button
+        class="danger"
+        type="button"
+        disabled={batchBusy || batchSelectionCount === 0}
+        onclick={() => void deleteSelectedTodos()}
+      >
+        {$translator("common.delete")}
+      </button>
+    </section>
+  {/if}
+
+  {#if selectedNote}
+    <NoteEditor
+      note={selectedNote}
+      draft={selectedNote.uuid === NOTE_DRAFT_UUID}
+      saving={noteEditorSaving}
+      error={noteAttachmentError || $notes.error}
+      onChange={updateNote}
+      onDone={closeNoteEditor}
+      onPin={pinNote}
+      onColor={colorNote}
+      onDelete={deleteNote}
+      attachments={selectedNote.uuid === NOTE_DRAFT_UUID ? [] : (noteAttachmentsByNote[selectedNote.uuid] ?? [])}
+      attachmentPreviewUrls={noteAttachmentPreviewUrls}
+      attachmentBusy={noteAttachmentBusy}
+      onAddImages={addNoteImages}
+      onAddFiles={addNoteFiles}
+      onOpenAttachment={noteAttachmentApi.originalUrl}
+      onOpenFile={noteAttachmentApi.openFile}
+      onMoveAttachment={moveNoteAttachment}
+      onDeleteAttachment={deleteNoteAttachment}
+      onRetryAttachment={retryNoteAttachment}
+    />
+  {:else if listView === "notes"}
+    <NoteList
+      items={$visibleNotes}
+      loading={$notes.loading}
+      error={$notes.error}
+      searchActive={searchQuery.trim().length > 0}
+      onOpen={openNote}
+      onPin={pinNote}
+      onColor={colorNote}
+      onDelete={deleteNote}
+      attachmentsByNote={noteAttachmentsByNote}
+      attachmentPreviewUrls={noteAttachmentPreviewUrls}
+    />
+  {:else}
+  <section class="todo-list" aria-live="polite">
+    {#if $todos.loading}
+      <div class="status">{$translator("empty.loading")}</div>
+    {:else if $todos.error && $todos.items.length === 0}
+      <div class="status error">
+        <span>{$todos.error}</span>
+        <button type="button" onclick={() => todos.load()}>{$translator("common.retry")}</button>
+      </div>
+    {:else if $todos.items.length === 0}
+      <div class="empty-state">
+        <img class="empty-mascot" src="/eggdone-icon.png" alt="" aria-hidden="true" />
+        <strong>{$translator("empty.title")}</strong>
+        <span>{$translator("empty.subtitle")}</span>
+      </div>
+    {:else if renderedTodos.length === 0}
+      <div class="empty-state filtered-empty">
+        <strong>
+          {searchActive
+            ? $translator("search.noMatch")
+            : listView === "today"
+              ? $translator("empty.todayTitle")
+              : listView === "quadrants"
+                ? $translator("empty.matrixTitle")
+                : listView === "calendar"
+                  ? $translator("empty.calendarTitle")
+              : $translator("empty.completedHidden")}
+        </strong>
+        <span>
+          {searchActive
+            ? $translator("search.tryAnother")
+            : listView === "today"
+              ? $translator("empty.todayHint")
+              : listView === "quadrants"
+                ? $translator("empty.matrixHint")
+                : listView === "calendar"
+                  ? $translator("empty.calendarHint")
+              : $translator("empty.completedHint")}
+        </span>
+      </div>
+    {:else}
+      {#if $todos.error}
+        <div class="inline-error" role="alert">{$todos.error}</div>
+      {/if}
+      {#if listView === "quadrants"}
+        <div class="quadrant-overview" aria-label={$translator("matrix.fullName")}>
+          {#each quadrantDefinitions as quadrant (quadrant.key)}
+            <button
+              class:active={selectedQuadrant === quadrant.key}
+              class={`quadrant-card ${quadrant.tone}`}
+              type="button"
+              aria-pressed={selectedQuadrant === quadrant.key}
+              onclick={() =>
+                (selectedQuadrant =
+                  selectedQuadrant === quadrant.key ? "all" : quadrant.key)}
+            >
+              <span>{quadrant.title}</span>
+              <strong>{quadrantCount(quadrant.key)}</strong>
+              <small>{quadrant.subtitle}</small>
+            </button>
+          {/each}
+        </div>
+        {#if selectedQuadrant !== "all"}
+          <button
+            class="quadrant-reset"
+            type="button"
+            onclick={() => (selectedQuadrant = "all")}
+          >
+            {$translator("matrix.showAll")}
+          </button>
+        {/if}
+        <div class="quadrant-sections">
+          {#each quadrantDefinitions.filter((quadrant) => selectedQuadrant === "all" || selectedQuadrant === quadrant.key) as quadrant (quadrant.key)}
+            {@const sectionTodos = quadrantTodos(quadrant.key)}
+            <section class={`quadrant-section ${quadrant.tone}`}>
+              <header>
+                <span class="quadrant-dot" aria-hidden="true"></span>
+                <div>
+                  <strong>{quadrant.title}</strong>
+                  <span>{quadrant.subtitle}</span>
+                </div>
+                <small>{sectionTodos.length}</small>
+              </header>
+              {#if sectionTodos.length === 0}
+                <div class="quadrant-empty">{$translator("matrix.empty")}</div>
+              {:else}
+                {#each sectionTodos as todo (todo.id)}
+                  {@const group = sectionTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+                  {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
+                  <div
+                    class:selected={selectedTodoId === todo.id}
+                    class="todo-row"
+                    animate:flip={{ duration: reorderAnimationDuration }}
+                  >
+                    <TodoItem
+                      {todo}
+                      onToggle={toggleTodo}
+                      onEdit={editTodo}
+                      onNote={noteTodo}
+                      onPin={pinTodo}
+                      onPriority={priorityTodo}
+                      onFocus={openFocusForTodo}
+                      onSchedule={scheduleTodo}
+                      onSnooze={snoozeTodo}
+                      groups={$todos.groups}
+                      onGroupChange={moveTodoToGroup}
+                      onDelete={deleteTodo}
+                      onMove={moveTodo}
+                      onDragStart={startDrag}
+                      batchMode={batchMode}
+                      batchSelected={batchSelectedIds.has(todo.id)}
+                      onBatchSelect={toggleBatchTodo}
+                      canMoveUp={groupIndex > 0}
+                      canMoveDown={groupIndex < group.length - 1}
+                      isDragging={draggedTodo?.id === todo.id}
+                      isDragTarget={draggedTodo?.id === todo.id}
+                      dragDisabled={true}
+                      reorderDisabled={true}
+                      editRequest={
+                        editRequestTodoId === todo.id ? editRequestSeq : 0
+                      }
+                    />
+                  </div>
+                {/each}
+              {/if}
+            </section>
+          {/each}
+        </div>
+      {:else if listView === "calendar"}
+        <section class="agenda-nav" aria-label={$translator("nav.calendar")}>
+          <div class="agenda-week-actions">
+            <button type="button" onclick={() => shiftAgendaWeek(-7)}>
+              {$translator("calendar.previousWeek")}
+            </button>
+            <button type="button" onclick={jumpAgendaToday}>{$translator("calendar.today")}</button>
+            <button type="button" onclick={() => shiftAgendaWeek(7)}>
+              {$translator("calendar.nextWeek")}
+            </button>
+          </div>
+          {#key `${agendaWeekStartAt}-${agendaWeekVersion}`}
+            <div class="agenda-week-strip">
+              {#each agendaWeekDays() as day (day.dateKey)}
+                <button
+                  class:active={selectedAgendaDate === day.dateKey}
+                  class:today={day.dateKey === localDateString(0)}
+                  type="button"
+                  aria-pressed={selectedAgendaDate === day.dateKey}
+                  onclick={() => selectAgendaDate(day.dateKey)}
+                >
+                  <span>{day.label}</span>
+                  <strong>{day.day}</strong>
+                  <small class:visible={day.count > 0}>{day.count}</small>
+                </button>
+              {/each}
+            </div>
+          {/key}
+          <div class="agenda-jump">
+            <button
+              type="button"
+              onclick={() => (agendaDatePickerOpen = !agendaDatePickerOpen)}
+            >
+              {$translator("calendar.jumpDate")}
+            </button>
+            {#if selectedAgendaDate}
+              <button
+                class="plain"
+                type="button"
+                onclick={() => (selectedAgendaDate = null)}
+              >
+                {$translator("calendar.showAll")}
+              </button>
+            {/if}
+          </div>
+          {#if agendaDatePickerOpen}
+            <input
+              class="agenda-date-picker"
+              type="date"
+              value={selectedAgendaDate ?? localDateString(0)}
+              onchange={(event) => {
+                setAgendaDateFromPicker(event.currentTarget.value);
+              }}
+            />
+          {/if}
+        </section>
+        <div class="agenda-sections">
+          {#if selectedAgendaDate}
+            {#key selectedAgendaDate}
+              {@const sectionTodos = agendaDateTodos(selectedAgendaDate)}
+              <section class="agenda-section selected-date">
+                <header>
+                  <div>
+                    <strong>{selectedAgendaLabel()}</strong>
+                    <span>{$translator("calendar.selectedDate")}</span>
+                  </div>
+                  <small>{sectionTodos.length}</small>
+                </header>
+                {#if sectionTodos.length === 0}
+                  <div class="agenda-empty">{$translator("calendar.emptyDate")}</div>
+                {:else}
+                  {#each sectionTodos as todo (todo.id)}
+                    {@const group = sectionTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+                    {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
+                    <div
+                      class:selected={selectedTodoId === todo.id}
+                      class="todo-row"
+                      animate:flip={{ duration: reorderAnimationDuration }}
+                    >
+                      <TodoItem
+                        {todo}
+                        onToggle={toggleTodo}
+                        onEdit={editTodo}
+                        onNote={noteTodo}
+                        onPin={pinTodo}
+                        onPriority={priorityTodo}
+                        onFocus={openFocusForTodo}
+                        onSchedule={scheduleTodo}
+                        onSnooze={snoozeTodo}
+                        groups={$todos.groups}
+                        onGroupChange={moveTodoToGroup}
+                        onDelete={deleteTodo}
+                        onMove={moveTodo}
+                        onDragStart={startDrag}
+                        batchMode={batchMode}
+                        batchSelected={batchSelectedIds.has(todo.id)}
+                        onBatchSelect={toggleBatchTodo}
+                        canMoveUp={groupIndex > 0}
+                        canMoveDown={groupIndex < group.length - 1}
+                        isDragging={draggedTodo?.id === todo.id}
+                        isDragTarget={draggedTodo?.id === todo.id}
+                        dragDisabled={true}
+                        reorderDisabled={true}
+                        editRequest={
+                          editRequestTodoId === todo.id ? editRequestSeq : 0
+                        }
+                      />
+                    </div>
+                  {/each}
+                {/if}
+              </section>
+            {/key}
+          {:else}
+            {#each agendaDefinitions as section (section.key)}
+            {@const sectionTodos = agendaTodos(section.key)}
+            {#if sectionTodos.length > 0}
+              <section class={`agenda-section ${section.key}`}>
+                <header>
+                  <div>
+                    <strong>{section.title}</strong>
+                    <span>{section.subtitle}</span>
+                  </div>
+                  <small>{sectionTodos.length}</small>
+                </header>
+                {#each sectionTodos as todo (todo.id)}
+                  {@const group = sectionTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+                  {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
+                  <div
+                    class:selected={selectedTodoId === todo.id}
+                    class="todo-row"
+                    animate:flip={{ duration: reorderAnimationDuration }}
+                  >
+                    <TodoItem
+                      {todo}
+                      onToggle={toggleTodo}
+                      onEdit={editTodo}
+                      onNote={noteTodo}
+                      onPin={pinTodo}
+                      onPriority={priorityTodo}
+                      onFocus={openFocusForTodo}
+                      onSchedule={scheduleTodo}
+                      onSnooze={snoozeTodo}
+                      groups={$todos.groups}
+                      onGroupChange={moveTodoToGroup}
+                      onDelete={deleteTodo}
+                      onMove={moveTodo}
+                      onDragStart={startDrag}
+                      batchMode={batchMode}
+                      batchSelected={batchSelectedIds.has(todo.id)}
+                      onBatchSelect={toggleBatchTodo}
+                      canMoveUp={groupIndex > 0}
+                      canMoveDown={groupIndex < group.length - 1}
+                      isDragging={draggedTodo?.id === todo.id}
+                      isDragTarget={draggedTodo?.id === todo.id}
+                      dragDisabled={true}
+                      reorderDisabled={true}
+                      editRequest={
+                        editRequestTodoId === todo.id ? editRequestSeq : 0
+                      }
+                    />
+                  </div>
+                {/each}
+              </section>
+            {/if}
+            {/each}
+          {/if}
+        </div>
+      {:else}
+      {#each renderedTodos as todo (todo.id)}
+        {@const group = renderedTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+        {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
+        <div
+          class:selected={selectedTodoId === todo.id}
+          class="todo-row"
+          animate:flip={{ duration: reorderAnimationDuration }}
+        >
+          <TodoItem
+            {todo}
+            onToggle={toggleTodo}
+            onEdit={editTodo}
+            onNote={noteTodo}
+            onPin={pinTodo}
+            onPriority={priorityTodo}
+            onFocus={openFocusForTodo}
+            onSchedule={scheduleTodo}
+            onSnooze={snoozeTodo}
+            groups={$todos.groups}
+            onGroupChange={moveTodoToGroup}
+            onDelete={deleteTodo}
+            onMove={moveTodo}
+            onDragStart={startDrag}
+            batchMode={batchMode}
+            batchSelected={batchSelectedIds.has(todo.id)}
+            onBatchSelect={toggleBatchTodo}
+            canMoveUp={groupIndex > 0}
+            canMoveDown={groupIndex < group.length - 1}
+            isDragging={draggedTodo?.id === todo.id}
+            isDragTarget={draggedTodo?.id === todo.id}
+            dragDisabled={batchMode || (reorderDisabled && !canDragTodoToGroup(todo))}
+            reorderDisabled={reorderDisabled}
+            editRequest={
+              editRequestTodoId === todo.id ? editRequestSeq : 0
+            }
+          />
+        </div>
+      {/each}
+      {/if}
+    {/if}
+  </section>
+  {/if}
+
+  <footer>
+    <span>{$translator("footer.encouragement")}</span>
+    <button
+      class:syncing={$syncStatus.kind === "syncing"}
+      class:sync-ok={$syncStatus.kind === "synced"}
+      class:sync-problem={["offline", "conflict", "failed"].includes(
+        $syncStatus.kind,
+      )}
+      class="footer-sync-status"
+      type="button"
+      title={footerSyncTitle($syncStatus.kind)}
+      onclick={() => {
+        showAbout = false;
+        showDataManager = false;
+        showSettings = true;
+      }}
+    >
+      <span aria-hidden="true"></span>
+      {footerSyncLabel($syncStatus.kind)}
+    </button>
+    <button
+      type="button"
+      onclick={() => {
+        showDataManager = false;
+        showSettings = false;
+        showAbout = true;
+      }}>{$translator("footer.about")}</button
+    >
+  </footer>
+</main>
+
+{#if showDataManager}
+  <DataManager
+    onClose={() => (showDataManager = false)}
+    onImported={async () => {
+      await Promise.all([todos.load(), notes.load()]);
+    }}
+  />
+{/if}
+
+{#if showSettings && desktopSettings}
+  <SettingsPanel
+    settings={desktopSettings}
+    defaultListViewMode={defaultListViewMode}
+    onClose={() => (showSettings = false)}
+    onChange={(settings) => (desktopSettings = settings)}
+    onDefaultListViewChange={setDefaultListViewMode}
+  />
+{/if}
+
+{#if undoTodos.length > 0}
+  <div class="undo-toast" role="status">
+    <span>
+      {undoTodos.length === 1
+        ? $translator("todo.deletedOne", { title: undoTodos[0].title })
+        : $translator("todo.deletedSeries", { count: undoTodos.length })}
+    </span>
+    <button type="button" onclick={() => void undoDelete()}>{$translator("common.undo")}</button>
+  </div>
+{/if}
+
+{#if deletedNote}
+  <div class="undo-toast" role="status">
+    <span>{$translator("note.deleted", { title: deletedNote.title || $translator("note.untitled") })}</span>
+    <button type="button" onclick={() => void undoNoteDelete()}>{$translator("common.undo")}</button>
+  </div>
+{/if}
+
+{#if deletedNoteAttachment}
+  <div class="undo-toast" role="status">
+    <span>{$translator("attachment.deletedImage", { name: deletedNoteAttachment.display_name })}</span>
+    <button type="button" onclick={() => void undoNoteAttachmentDelete()}>{$translator("common.undo")}</button>
+  </div>
+{/if}
+
+{#if showFocus}
+  <div class="focus-backdrop">
+    <button class="focus-dismiss" type="button" aria-label={$translator("focus.closePanel")} onclick={() => (showFocus = false)}></button>
+    <div
+      class:completed={focusCompletionVisible}
+      class:resting={focusPhase === "break" && !focusCompletionVisible}
+      class="focus-card"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="focus-title"
+    >
+      <header>
+        <div>
+          <p>{$translator("focus.timerName")}</p>
+          <h2 id="focus-title">{focusDisplayPhase}</h2>
+        </div>
+        <button type="button" aria-label={$translator("common.close")} onclick={() => (showFocus = false)}>×</button>
+      </header>
+
+      <img class="focus-illustration" src={focusIllustrationSrc} alt="" aria-hidden="true" />
+
+      <strong class="focus-time">{focusDisplayTime}</strong>
+      {#if focusTarget}
+        <div class="focus-target-row">
+          <small class="focus-target">{$translator("focus.currentTarget", { title: focusTarget.title })}</small>
+          <button type="button" onclick={() => void completeFocusTarget()} disabled={completingFocusTarget}>
+            {completingFocusTarget ? $translator("focus.completing") : $translator("focus.completed")}
+          </button>
+        </div>
+      {/if}
+      <p class="focus-copy">{focusDisplayHint}</p>
+
+      <div class="focus-actions">
+        <button type="button" class="primary" onclick={() => {
+          if (focusRemainingMs === focusDurations[focusPhase] && !focusRunning) {
+            startFocusSession(focusPhase);
+          } else {
+            toggleFocusRunning();
+          }
+        }}>{focusRunning
+          ? $translator("focus.pause")
+          : focusRemainingMs === focusDurations[focusPhase]
+            ? $translator("focus.start")
+            : $translator("focus.resume")}</button>
+        <button type="button" onclick={addFocusFiveMinutes}>{$translator("focus.addFiveMinutes")}</button>
+        <button type="button" onclick={skipFocusPhase}>{$translator("focus.skip")}</button>
+        <button type="button" onclick={endFocusSession}>{$translator("focus.end")}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showAbout}
+  <div class="about-backdrop">
+    <button class="about-dismiss" type="button" aria-label={$translator("about.close")} onclick={() => showAbout = false}></button>
+    <div class="about-card" role="dialog" aria-modal="true" aria-labelledby="about-title">
+      <img class="about-mascot" src="/eggdone-icon.png" alt="" aria-hidden="true" />
+      <h2 id="about-title">EggDone</h2>
+      <p>{$translator("about.version", { version: packageMetadata.version })}</p>
+      <small>{$translator("about.description")}</small>
+      <button type="button" onclick={() => showAbout = false}>{$translator("about.acknowledge")}</button>
+    </div>
+  </div>
+{/if}
