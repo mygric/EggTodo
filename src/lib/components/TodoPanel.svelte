@@ -1229,7 +1229,7 @@
       .catch(() => {});
   }
 
-  async function addTodo() {
+async function addTodo() {
     const nextTitle = title.trim();
     if (!nextTitle || adding) return;
     const parsed = quickAddPreview ?? {
@@ -1246,19 +1246,39 @@
       const created = await todos.add(parsed.title, groupUuid);
       if (parsed.schedule) {
         await todos.setSchedule(created.id, parsed.schedule);
+      } else {
+        // 如果没有解析到时间，则默认设置为今天 21:00
+        const today = new Date();
+        const dateStr = today.toISOString().split('T')[0];
+        const defaultDueAt = new Date(`${dateStr}T21:00:00`).getTime();
+        await todos.setSchedule(created.id, {
+          due_date: null,
+          due_at: defaultDueAt,
+          reminder_at: null,
+          repeat_rule: null,
+        });
       }
       if (parsed.priority === 1) {
         await todos.setPriority(created, 1);
       }
       title = "";
       quickAddParsingDisabledFor = "";
+
+      // ⭐ 强制刷新日历视图
+      if (listView === 'calendar') {
+          const currentView = listView;
+          listView = 'all';
+          await tick(); // 确保 tick 已导入
+          listView = currentView;
+      }
+
     } catch (error) {
       todos.reportError(error);
     } finally {
       adding = false;
       inputElement?.focus();
     }
-  }
+}
 
 async function toggleTodo(todo: Todo) {
     try {

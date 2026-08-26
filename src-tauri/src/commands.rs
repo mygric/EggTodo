@@ -751,7 +751,7 @@ fn delete_tomorrow_repeat_instance(
     ).map_err(|e| e.to_string())?;
     
     if deleted > 0 {
-        println!("🔥 删除了 {} 条明天重复任务", deleted);
+     
     }
     Ok(())
 }
