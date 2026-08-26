@@ -1314,6 +1314,16 @@ async function addTodo() {
 async function toggleTodo(todo: Todo) {
     try {
         await todos.toggle(todo);
+        
+        // 播放音效
+        try {
+            const audio = new Audio('/complete.mp3');
+            audio.volume = 0.5;
+            audio.play();
+        } catch (e) {
+            // 音效播放失败不影响主功能
+        }
+        
         if (listView === 'calendar') {
             // 先刷新数据
             await todos.refresh();
@@ -1329,6 +1339,7 @@ async function toggleTodo(todo: Todo) {
         todos.reportError(error);
     }
 }
+
 
 
   async function editTodo(
@@ -1604,6 +1615,20 @@ async function toggleTodo(todo: Todo) {
       target.isContentEditable
     );
   }
+function sortTodosByDueTime() {
+    const currentTodos = $todos.items;
+    const sorted = [...currentTodos].sort((a, b) => {
+        const getTime = (todo) => {
+            if (todo.due_at !== null) return todo.due_at;
+            if (todo.due_date !== null) {
+                return new Date(todo.due_date + 'T00:00:00').getTime();
+            }
+            return Infinity;
+        };
+        return getTime(a) - getTime(b);
+    });
+    todos.reorder(sorted.map(t => t.id));
+}
 
   function toggleBatchMode() {
     batchMode = !batchMode;
@@ -2596,6 +2621,18 @@ async function deleteTodo(
             >
               {batchMode ? $translator("batch.exit") : $translator("batch.actions")}
             </button>
+
+<button
+    type="button"
+    role="menuitem"
+    onclick={() => {
+        sortTodosByDueTime();
+        summaryMenuOpen = false;
+    }}
+>
+    按时间排序
+</button>
+
           {/if}
         </div>
       {/if}
