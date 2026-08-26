@@ -2015,8 +2015,8 @@ footer {
 
 .todo-item {
   gap: 9px;
-  margin-bottom: 8px;
-  padding: 11px 8px 11px 10px;
+  margin-bottom: 4px;
+  padding: 8px 8px 11px 10px;
   border: 1px solid #f0e9dc;
   border-radius: 14px;
   background: rgb(255 255 255 / 75%);

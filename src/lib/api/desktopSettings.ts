@@ -13,6 +13,7 @@ const SHORTCUT_KEY = "eggdone-global-shortcut";
 const SHORTCUT_ENABLED_KEY = "eggdone-global-shortcut-enabled";
 
 export const shortcutOptions = [
+    { value: "CommandOrControl+1", label: "Ctrl + 1" }, 
   { value: "CommandOrControl+Shift+Space", label: "Ctrl + Shift + Space" },
   { value: "CommandOrControl+Alt+Space", label: "Ctrl + Alt + Space" },
   { value: "Alt+Shift+Space", label: "Alt + Shift + Space" },
