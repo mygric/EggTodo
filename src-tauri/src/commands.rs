@@ -776,6 +776,15 @@ pub fn set_todo_completed_by_uuid(
 }
 
 #[tauri::command]
+pub fn set_window_always_on_top(app: tauri::AppHandle, on_top: bool) -> Result<(), String> {
+    // 获取主窗口（或面板窗口）
+    let window = app.get_webview_window("main").ok_or("窗口未找到")?;
+    window.set_always_on_top(on_top).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+
+#[tauri::command]
 pub fn update_todo_title(
     id: i64,
     title: String,

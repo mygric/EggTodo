@@ -78,13 +78,17 @@ pub fn run() {
                     let _ = window.hide();
                 }
                 WindowEvent::Focused(false) if window.label() == "main" => {
-                    let panel_state = window.app_handle().state::<tray::PanelState>();
-                    if !panel_state.handle_blur() {
-                        return;
-                    }
-                    // Keep the process alive and treat the panel like a native tray popover.
-                    let _ = window.hide();
-                }
+    // 如果窗口置顶，不隐藏
+    if let Ok(true) = window.is_always_on_top() {
+        return;
+    }
+    let panel_state = window.app_handle().state::<tray::PanelState>();
+    if !panel_state.handle_blur() {
+        return;
+    }
+    // Keep the process alive and treat the panel like a native tray popover.
+    let _ = window.hide();
+}
                 _ => {}
             }
         })
@@ -157,6 +161,7 @@ pub fn run() {
             data_exchange::preview_full_backup_import,
             data_exchange::confirm_full_backup_import,
             data_exchange::backup_database,
+            commands::set_window_always_on_top,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,4 +1,5 @@
 <script lang="ts">
+import { getAllWindows } from "@tauri-apps/api/window";
   import { isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -165,6 +166,24 @@
   let focusCompletionTimer: number | null = null;
   let desktopSettings: DesktopSettings | null = null;
   let theme: Theme = "light";
+
+  let isWindowPinned = false;
+
+import { invoke } from "@tauri-apps/api/core";
+
+async function toggleWindowPin() {
+    if (!isTauri()) return;
+    try {
+        const currentWindow = getCurrentWindow();
+        const currentPinned = await currentWindow.isAlwaysOnTop();
+        await currentWindow.setAlwaysOnTop(!currentPinned);
+        isWindowPinned = !currentPinned;
+        console.log('面板窗口置顶状态已切换为:', !currentPinned);
+    } catch (error) {
+        console.error('切换窗口置顶失败:', error);
+    }
+}
+
   let reorderAnimationDuration = 170;
   let inputElement: HTMLInputElement;
   let draggedTodo: Todo | null = null;
@@ -367,6 +386,18 @@
     }
     window.addEventListener("pointerdown", handlePointerDown, true);
     if (isTauri()) {
+
+
+// 在 onMount 中获取主窗口的置顶状态
+getAllWindows().then((allWindows) => {
+    const mainWindow = allWindows.find(w => w.label === 'main');
+    if (mainWindow) {
+        mainWindow.isAlwaysOnTop().then((pinned) => {
+            isWindowPinned = pinned;
+        }).catch(() => {});
+    }
+}).catch(() => {});
+
       void initializeAutoSync().then(async () => {
         const appWindow = getCurrentWindow();
         setAutoSyncForeground(await appWindow.isFocused());
@@ -2062,6 +2093,7 @@ async function deleteTodo(
   }
 </script>
 
+
 <svelte:window
   onpointerdown={markPanelInteraction}
   onkeydown={handlePanelKeydown}
@@ -2144,6 +2176,27 @@ async function deleteTodo(
           </svg>
         {/if}
       </button>
+
+<button
+    class:active={isWindowPinned}
+    class="pin-window-button"
+    type="button"
+    aria-label="窗口置顶"
+    title="窗口置顶"
+    onclick={toggleWindowPin}
+>
+    {#if isWindowPinned}
+        <!-- 置顶状态：实心图钉 -->
+        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+        </svg>
+    {:else}
+        <!-- 未置顶状态：空心图钉 -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+        </svg>
+    {/if}
+</button>
 
       <button class="close-button" type="button" aria-label={$translator("common.hidePanel")} title={$translator("common.hidePanel")} onclick={() => todoApi.hidePanel()}>
         <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -3116,3 +3169,31 @@ async function deleteTodo(
     </div>
   </div>
 {/if}
+
+<style>
+    /* 新增的置顶按钮样式 */
+    .pin-window-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary, #a89c89);
+        cursor: pointer;
+        border-radius: 4px;
+        transition: background 0.2s, color 0.2s;
+        padding: 0;
+        margin: 0;
+    }
+
+    .pin-window-button:hover {
+        background: var(--hover-bg, #eee8db);
+        color: var(--text-primary, #705f47);
+    }
+
+    .pin-window-button.active {
+        color: var(--accent-color, #f6c94c);
+    }
+</style>

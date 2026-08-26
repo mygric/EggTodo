@@ -11,6 +11,8 @@
     "global-shortcut:allow-unregister",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-is-always-on-top"
   ]
 }

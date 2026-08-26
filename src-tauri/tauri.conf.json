@@ -23,7 +23,7 @@
         "visible": false,
         "decorations": false,
         "resizable": false,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "shadow": true
       },
@@ -47,6 +47,8 @@
       "csp": null
     }
   },
+
+
   "bundle": {
     "active": true,
     "targets": "all",
