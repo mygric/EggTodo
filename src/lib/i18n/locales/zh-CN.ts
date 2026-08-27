@@ -141,6 +141,12 @@ export const zhCN = {
   "todo.repeatDeletePrompt": "这是重复任务，要删除哪些任务？",
   "todo.repeatDeleteSeries": "整个重复系列",
   "todo.unpin": "取消置顶",
+
+"todo.repeatYearly": "每年",
+"todo.repeatCustomInterval": "每x天/月",
+"todo.days": "天",
+"todo.months": "个月",
+
   "group.create": "新建分组",
   "group.newPlaceholder": "新分组",
   "group.all": "全部分组",

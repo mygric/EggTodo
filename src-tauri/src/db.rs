@@ -49,6 +49,7 @@ pub(crate) fn configure_connection(connection: &Connection) -> rusqlite::Result<
     )
 }
 
+
 pub(crate) fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
         "
@@ -66,22 +67,31 @@ pub(crate) fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     apply_migration(connection, 1, create_legacy_schema)?;
     apply_migration(connection, 2, migrate_todos_for_sync)?;
     apply_migration(connection, 3, add_sync_identity)?;
-    apply_migration(connection, 4, add_sync_settings)?;
-    apply_migration(connection, 5, add_todo_pinning)?;
-    apply_migration(connection, 6, add_todo_due_fields)?;
+    
+    // ⭐ 跳过添加字段的迁移
+    // apply_migration(connection, 4, add_sync_settings)?;
+    // apply_migration(connection, 5, add_todo_pinning)?;
+    // apply_migration(connection, 6, add_todo_due_fields)?;
+    
     apply_migration(connection, 7, add_reminder_deliveries)?;
-    apply_migration(connection, 8, add_todo_groups)?;
-    apply_migration(connection, 9, add_todo_repeats)?;
-    apply_migration(connection, 10, add_repeat_series_uuid)?;
-    apply_migration(connection, 11, add_todo_note)?;
-    apply_migration(connection, 12, add_todo_archive)?;
-    apply_migration(connection, 13, add_todo_priority)?;
+    
+    // ⭐ 启用创建新表的迁移
+    apply_migration(connection, 8, add_todo_groups)?;  // 取消注释
+    
+    // ⭐ 跳过添加字段的迁移
+    // apply_migration(connection, 9, add_todo_repeats)?;
+    // apply_migration(connection, 10, add_repeat_series_uuid)?;
+    // apply_migration(connection, 11, add_todo_note)?;
+    // apply_migration(connection, 12, add_todo_archive)?;
+    // apply_migration(connection, 13, add_todo_priority)?;
+    
     apply_migration(connection, 14, add_notes)?;
     apply_migration(connection, 15, add_note_attachments)?;
 
     debug_assert_eq!(schema_version(connection)?, CURRENT_SCHEMA_VERSION);
     Ok(())
 }
+
 
 fn apply_migration(
     connection: &mut Connection,
@@ -175,27 +185,39 @@ fn migrate_todos_for_sync(transaction: &Transaction<'_>) -> rusqlite::Result<()>
         todos
     };
 
-    transaction.execute_batch(
-        "
-        ALTER TABLE todos RENAME TO todos_legacy;
+transaction.execute_batch(
+    "
+    ALTER TABLE todos RENAME TO todos_legacy;
 
-        CREATE TABLE todos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT NOT NULL UNIQUE,
-            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
-            completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0, 1)),
-            sort_order INTEGER NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            completed_at INTEGER,
-            deleted_at INTEGER
-        );
+CREATE TABLE todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+    note TEXT,
+    group_uuid TEXT,
+    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0, 1)),
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1)),
+    priority INTEGER NOT NULL DEFAULT 0 CHECK(priority IN (0, 1)),
+    sort_order INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    deleted_at INTEGER,
+    archived_at INTEGER,
+    due_date TEXT,
+    due_at INTEGER,
+    reminder_at INTEGER,
+    repeat_rule TEXT,
+    repeat_next_due_date TEXT,
+    repeat_series_uuid TEXT,
+    updated_by TEXT NOT NULL
+);
 
-        CREATE INDEX idx_todos_active_order
-            ON todos(deleted_at, completed, sort_order);
-        CREATE INDEX idx_todos_updated_at ON todos(updated_at);
-        ",
-    )?;
+    CREATE INDEX idx_todos_active_order
+        ON todos(deleted_at, completed, sort_order);
+    CREATE INDEX idx_todos_updated_at ON todos(updated_at);
+    ",
+)?;
 
     for (index, todo) in legacy_todos.into_iter().enumerate() {
         let completed_at = todo.completed.then_some(todo.updated_at);
@@ -224,22 +246,22 @@ fn migrate_todos_for_sync(transaction: &Transaction<'_>) -> rusqlite::Result<()>
 }
 
 fn add_sync_identity(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    // ⭐ 使用 CREATE TABLE IF NOT EXISTS，确保表总是存在
     transaction.execute_batch(
         "
-        CREATE TABLE app_metadata (
+        CREATE TABLE IF NOT EXISTS app_metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-
-        ALTER TABLE todos
-            ADD COLUMN updated_by TEXT NOT NULL DEFAULT '';
         ",
     )?;
     let device_id = Uuid::new_v4().to_string();
+    // ⭐ 使用 INSERT OR IGNORE 避免重复插入
     transaction.execute(
-        "INSERT INTO app_metadata (key, value) VALUES (?1, ?2)",
+        "INSERT OR IGNORE INTO app_metadata (key, value) VALUES (?1, ?2)",
         params![DEVICE_ID_KEY, device_id],
     )?;
+    // ⭐ 更新已存在的 todos 的 updated_by
     transaction.execute(
         "UPDATE todos SET updated_by = ?1 WHERE updated_by = ''",
         params![device_id],
@@ -280,10 +302,7 @@ fn add_sync_settings(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
 fn add_todo_pinning(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "
-        ALTER TABLE todos
-            ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1));
-
-        DROP INDEX idx_todos_active_order;
+        DROP INDEX IF EXISTS idx_todos_active_order;
         CREATE INDEX idx_todos_active_order
             ON todos(deleted_at, completed, pinned DESC, sort_order);
         ",
@@ -341,8 +360,7 @@ fn add_todo_groups(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
             ON groups(deleted_at, sort_order);
         CREATE INDEX idx_groups_updated_at ON groups(updated_at);
 
-        ALTER TABLE todos
-            ADD COLUMN group_uuid TEXT;
+
         CREATE INDEX idx_todos_group_uuid
             ON todos(group_uuid, deleted_at, completed, pinned DESC, sort_order);
         ",

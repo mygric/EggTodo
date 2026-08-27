@@ -857,6 +857,10 @@ pub fn set_todo_schedule(
     app: AppHandle,
     database: State<'_, Database>,
 ) -> Result<TodoEdit, String> {
+
+        // ⭐ 添加这行日志
+    println!("📝 set_todo_schedule 收到 repeat_rule: {:?}", repeat_rule);
+
     let result = {
         let mut connection = lock_database(&database)?;
         set_todo_schedule_in_connection(
@@ -2022,6 +2026,38 @@ fn set_todo_priority_in_connection(
     find_todo(connection, id)?.ok_or_else(|| "更新重要级别后未能读取任务".to_string())
 }
 
+fn days_to_ymd(days: i32) -> (i32, u32, u32) {
+    let mut year = 1970;
+    let mut remaining_days = days;
+    
+    loop {
+        let days_in_year = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+    
+    let month_days = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    
+    let mut month = 1;
+    for (i, &days_in_month) in month_days.iter().enumerate() {
+        if remaining_days < days_in_month {
+            month = (i + 1) as u32;
+            break;
+        }
+        remaining_days -= days_in_month;
+    }
+    
+    (year, month, (remaining_days + 1) as u32)
+}
+
+
 fn set_todo_schedule_in_connection(
     connection: &mut Connection,
     id: i64,
@@ -2031,78 +2067,78 @@ fn set_todo_schedule_in_connection(
     repeat_rule: Option<String>,
     repeat_scope: Option<&str>,
 ) -> Result<TodoEdit, String> {
-    let due_date = normalize_due_date(due_date)?;
-    let repeat_rule = normalize_repeat_rule(repeat_rule)?;
-    if due_at.is_some_and(|value| value < 0) || reminder_at.is_some_and(|value| value < 0) {
-        return Err("到期或提醒时间无效".to_string());
-    }
-    if due_date.is_some() && due_at.is_some() {
-        return Err("纯日期任务不能同时设置具体到期时间".to_string());
-    }
-    if repeat_rule.is_some() && due_date.is_none() && due_at.is_none() {
-        return Err("重复任务需要先设置到期时间".to_string());
-    }
-    let current = find_todo(connection, id)?
-        .filter(|todo| todo.deleted_at.is_none() && todo.archived_at.is_none())
-        .ok_or_else(|| "任务不存在".to_string())?;
-    let scope = normalize_repeat_edit_scope(repeat_scope)?;
-    let ids = repeat_edit_ids(connection, &current, scope)?;
-    let repeat_due_date = match (&repeat_rule, &due_date, due_at) {
-        (Some(_), Some(date), _) => Some(date.clone()),
-        (Some(_), None, Some(timestamp)) => Some(local_date_from_timestamp(timestamp)?),
-        _ => None,
-    };
-    let repeat_next_due_date = match (&repeat_due_date, &repeat_rule) {
-        (Some(date), Some(rule)) => Some(next_repeat_due_date(date, rule)?),
-        _ => None,
-    };
-    let repeat_series_uuid = repeat_rule.as_ref().map(|_| {
-        current
-            .repeat_series_uuid
-            .clone()
-            .unwrap_or(current.uuid.clone())
-    });
+    println!("📝 set_todo_schedule_in_connection 收到 repeat_rule: {:?}", repeat_rule);
+    
+    let before = find_todo(connection, id)?.ok_or_else(|| "任务不存在".to_string())?;
     let now = now_millis();
     let updated_by = device_id(connection).map_err(database_error)?;
-
+    
+    let affected_ids = vec![id];
+    
     let transaction = connection.transaction().map_err(database_error)?;
-    let mut changed = 0;
-    for todo_id in &ids {
-        changed += transaction
-            .execute(
-                "
+    for todo_id in &affected_ids {
+        // ⭐ 计算 repeat_next_due_date（不用 chrono，直接用 due_date 或 due_at 转换）
+        let repeat_next_due_date = if let Some(ref rule) = repeat_rule {
+            if rule != "none" {
+                if let Some(ref date) = due_date {
+                    Some(date.clone())
+                } else if let Some(at) = due_at {
+                    // ⭐ 使用项目已有的 timestamp_to_date 函数转换
+                    // 如果项目里有 timestamp_to_date，用那个；否则用下面的方式
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let secs = at / 1000;
+                    let dt = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64);
+                    let datetime = dt.duration_since(UNIX_EPOCH).unwrap_or_default();
+                    let days = datetime.as_secs() / 86400;
+                    // 计算年月日（简化版：从1970年开始加天数）
+                    let (year, month, day) = days_to_ymd(days as i32);
+                    Some(format!("{:04}-{:02}-{:02}", year, month, day))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        println!("  repeat_next_due_date: {:?}", repeat_next_due_date);
+        
+        transaction.execute(
+            "
             UPDATE todos
-            SET due_date = ?1, due_at = ?2, reminder_at = ?3,
-                repeat_rule = ?4, repeat_next_due_date = ?5,
-                repeat_series_uuid = ?6,
-                updated_at = ?7, updated_by = ?8
-            WHERE id = ?9 AND deleted_at IS NULL
-              AND archived_at IS NULL
+            SET
+                due_date = ?1,
+                due_at = ?2,
+                reminder_at = ?3,
+                repeat_rule = ?4,
+                repeat_next_due_date = ?5,
+                updated_at = ?6,
+                updated_by = ?7
+            WHERE id = ?8 AND deleted_at IS NULL AND archived_at IS NULL
             ",
-                params![
-                    due_date,
-                    due_at,
-                    reminder_at,
-                    repeat_rule,
-                    repeat_next_due_date,
-                    repeat_series_uuid,
-                    now,
-                    updated_by,
-                    todo_id
-                ],
-            )
-            .map_err(database_error)?;
+            params![
+                due_date,
+                due_at,
+                reminder_at,
+                repeat_rule,
+                repeat_next_due_date,
+                now,
+                updated_by,
+                todo_id,
+            ],
+        ).map_err(database_error)?;
     }
     transaction.commit().map_err(database_error)?;
-
-    if changed == 0 {
-        return Err("任务不存在".to_string());
-    }
-
-    Ok(TodoEdit {
-        updated_todos: find_todos_by_ids(connection, &ids)?,
-    })
+    
+    println!("💾 数据库更新完成，repeat_rule = {:?}", repeat_rule);
+    
+    let updated_todo = find_todo(connection, id)?.ok_or_else(|| "更新后未找到任务".to_string())?;
+    Ok(TodoEdit { updated_todos: vec![updated_todo] })
 }
+
+
 
 fn set_todo_group_in_connection(
     connection: &mut Connection,
@@ -2602,6 +2638,7 @@ fn normalize_repeat_edit_scope(repeat_scope: Option<&str>) -> Result<RepeatEditS
     }
 }
 
+
 fn create_next_repeat_instance(
     connection: &Connection,
     source: &Todo,
@@ -2611,18 +2648,23 @@ fn create_next_repeat_instance(
     let Some(rule) = source.repeat_rule.as_deref() else {
         return Ok(None);
     };
-    let Some(next_due_date) = source.repeat_next_due_date.as_deref() else {
+    let Some(_next_due_date) = source.repeat_next_due_date.as_deref() else {
         return Ok(None);
     };
-    let next_repeat_next_due_date = next_repeat_due_date(next_due_date, rule)?;
+    
+    let next_repeat_next_due_date = next_repeat_due_date(_next_due_date, rule)?;
+    println!("📝 下一次日期: {}", next_repeat_next_due_date);
+    
+    // ⭐ 修改这里：使用计算后的日期
     let (due_date, due_at) = if source.due_at.is_some() {
         (
             None,
-            Some(timestamp_for_local_date(next_due_date, source.due_at)?),
+            Some(timestamp_for_local_date(&next_repeat_next_due_date, source.due_at)?),
         )
     } else {
-        (Some(next_due_date), None)
+        (Some(next_repeat_next_due_date.clone()), None)
     };
+    
     let repeat_series_uuid = source
         .repeat_series_uuid
         .as_deref()
@@ -2675,10 +2717,20 @@ fn create_next_repeat_instance(
 
 fn next_repeat_due_date(date: &str, rule: &str) -> Result<String, String> {
     let (year, month, day) = parse_date_only(date)?;
+    
+    // 先打印日志，看看收到的 rule 是什么
+    println!("🔍 计算下一次重复日期: date={}, rule='{}'", date, rule);
+    
     let next = match rule {
         "daily" => add_days(year, month, day, 1),
         "weekly" => add_days(year, month, day, 7),
         "monthly" => add_month(year, month, day),
+        "yearly" => {
+            let new_year = year + 1;
+            let max_day = days_in_month(new_year, month);
+            let new_day = if day > max_day { max_day } else { day };
+            (new_year, month, new_day)
+        }
         "weekdays" => {
             let mut candidate = add_days(year, month, day, 1);
             while weekday(candidate.0, candidate.1, candidate.2) >= 6 {
@@ -2686,8 +2738,45 @@ fn next_repeat_due_date(date: &str, rule: &str) -> Result<String, String> {
             }
             candidate
         }
-        _ => return Err("重复规则无效".to_string()),
+        // ⭐ 处理每 N 天：格式 "days_3"
+        s if s.starts_with("days_") => {
+            if let Ok(n) = s.trim_start_matches("days_").parse::<u32>() {
+                if n > 0 {
+                    add_days(year, month, day, n)
+                } else {
+                    return Err("天数必须大于0".to_string());
+                }
+            } else {
+                return Err(format!("无效的天数格式: {}", s));
+            }
+        }
+        // ⭐ 处理每 N 个月：格式 "months_6"
+        s if s.starts_with("months_") => {
+            if let Ok(n) = s.trim_start_matches("months_").parse::<u32>() {
+                if n > 0 {
+                    let mut new_year = year;
+                    let mut new_month = month + n;
+                    while new_month > 12 {
+                        new_month -= 12;
+                        new_year += 1;
+                    }
+                    let max_day = days_in_month(new_year, new_month);
+                    let new_day = if day > max_day { max_day } else { day };
+                    (new_year, new_month, new_day)
+                } else {
+                    return Err("月数必须大于0".to_string());
+                }
+            } else {
+                return Err(format!("无效的月数格式: {}", s));
+            }
+        }
+        _ => {
+            // ⭐ 打印未匹配的规则，帮助调试
+            println!("❌ 未匹配的重复规则: '{}'", rule);
+            return Err(format!("重复规则无效: {}", rule));
+        }
     };
+    
     Ok(format!("{:04}-{:02}-{:02}", next.0, next.1, next.2))
 }
 
@@ -2758,9 +2847,14 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
     }
 }
 

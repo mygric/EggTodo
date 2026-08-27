@@ -56,6 +56,9 @@ pub fn run() {
         .manage(tray::PanelState::default())
         .manage(s3_sync::SyncRuntime::default())
         .setup(|app| {
+    let app_dir = app.path().app_data_dir().unwrap();
+    println!("📁 应用数据目录: {:?}", app_dir);
+
             let database = db::Database::open(app.handle())?;
             app.manage(database);
             let note_asset_store = note_asset_store::NoteAssetStore::from_app(app.handle())?;

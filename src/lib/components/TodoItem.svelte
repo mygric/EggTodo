@@ -96,6 +96,9 @@ import { todos } from "$lib/stores/todoStore";
   let noteInput: HTMLTextAreaElement;
   let itemElement: HTMLElement;
   let animationDuration = 140;
+let customIntervalValue = 3;
+let customIntervalUnit: 'days' | 'months' = 'days';
+
   $: dueLabel = localizedDueLabel(todo);
   $: dueTone = getDueTone(todo);
   $: notePreview = todo.note?.trim() ?? "";
@@ -217,7 +220,15 @@ import { todos } from "$lib/stores/todoStore";
       scheduleError = $translator("todo.invalidDue");
       return;
     }
-    const repeatRule = date && repeatChoice !== "none" ? repeatChoice : null;
+    // 在 setSchedule 函数中，找到 const repeatRule = ... 这行，替换为：
+let repeatRule = null;
+if (date && repeatChoice !== "none") {
+    if (repeatChoice === "custom_interval") {
+        repeatRule = `${customIntervalUnit}_${customIntervalValue}`;
+    } else {
+        repeatRule = repeatChoice;
+    }
+}
     const reminderAt = date
       ? reminderAtForDate(date, reminderChoice, customReminderDateTime)
       : null;
@@ -628,16 +639,49 @@ import { todos } from "$lib/stores/todoStore";
               />
             </label>
           {/if}
-          <label>
-            <span>{$translator("todo.repeat")}</span>
-            <select bind:value={repeatChoice} disabled={scheduleSaving}>
-              <option value="none">{$translator("todo.noRepeat")}</option>
-              <option value="daily">{$translator("todo.repeatDaily")}</option>
-              <option value="weekly">{$translator("todo.repeatWeekly")}</option>
-              <option value="monthly">{$translator("todo.repeatMonthly")}</option>
-              <option value="weekdays">{$translator("todo.repeatWeekdays")}</option>
+<label>
+    <span>{$translator("todo.repeat")}</span>
+    <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+        <select bind:value={repeatChoice} disabled={scheduleSaving} style="flex: 1; min-width: 80px;">
+            <option value="none">{$translator("todo.noRepeat")}</option>
+            <option value="daily">{$translator("todo.repeatDaily")}</option>
+            <option value="weekly">{$translator("todo.repeatWeekly")}</option>
+            <option value="monthly">{$translator("todo.repeatMonthly")}</option>
+            <option value="yearly">{$translator("todo.repeatYearly")}</option>
+            <option value="custom_interval">{$translator("todo.repeatCustomInterval")}</option>
+            <option value="weekdays">{$translator("todo.repeatWeekdays")}</option>
+        </select>
+        {#if repeatChoice === 'custom_interval'}
+            <input
+                type="number"
+                bind:value={customIntervalValue}
+                min="1"
+                max="365"
+                style="
+                    width: 52px;
+                    padding: 5px 4px;
+                    border: 1px solid #e1d5c2;
+                    border-radius: 8px;
+                    outline: 0;
+                    font-size: 10px;
+                    text-align: center;
+                "
+                disabled={scheduleSaving}
+            />
+            <select bind:value={customIntervalUnit} disabled={scheduleSaving} style="
+                padding: 5px 4px;
+                border: 1px solid #e1d5c2;
+                border-radius: 8px;
+                outline: 0;
+                font-size: 10px;
+                background: #fffdf8;
+            ">
+                <option value="days">{$translator("todo.days")}</option>
+                <option value="months">{$translator("todo.months")}</option>
             </select>
-          </label>
+        {/if}
+    </div>
+</label>
           <div class="schedule-footer">
             <button type="button" disabled={scheduleSaving} onclick={() => void setSchedule(null)}>{$translator("common.clear")}</button>
             <button type="button" disabled={scheduleSaving || !canSaveSchedule} onclick={() => void setSchedule(customDate)}>{$translator("common.save")}</button>

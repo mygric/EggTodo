@@ -21,7 +21,14 @@ export interface Todo {
   repeat_series_uuid: string | null;
 }
 
-export type RepeatRule = "daily" | "weekly" | "monthly" | "weekdays";
+export type RepeatRule = 
+    | "daily" 
+    | "weekly" 
+    | "monthly" 
+    | "yearly" 
+    | "weekdays"
+    | `days_${number}`
+    | `months_${number}`;
 export type RepeatDeleteScope = "single" | "series";
 export type RepeatEditScope = "single" | "future";
 
