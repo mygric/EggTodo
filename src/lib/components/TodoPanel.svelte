@@ -217,7 +217,7 @@ async function toggleWindowPin() {
   let selectedAgendaDate: string | null = null;
   let agendaWeekStartAt = startOfAgendaWeek();
   let agendaWeekVersion = 0;
-  let agendaNavCollapsed = false;
+  let agendaNavCollapsed = true;
   let agendaDatePickerOpen = false;
   let defaultListViewMode: DefaultListViewMode = "remember";
   let selectedGroup = "all";
@@ -1631,6 +1631,13 @@ function sortTodosByDueTime() {
     todos.reorder(sorted.map(t => t.id));
 }
 
+
+function getDateKey(offset) {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return date.toISOString().split('T')[0];
+}
+
   function toggleBatchMode() {
     batchMode = !batchMode;
     summaryMenuOpen = false;
@@ -2861,29 +2868,193 @@ async function deleteTodo(
 
 
 <section class="agenda-nav" aria-label={$translator("nav.calendar")}>
-    <!-- 折叠按钮 -->
-    <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
-<button
-    type="button"
-    class="agenda-collapse-toggle"
-    onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
-    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
-    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}
-    style="
-        background: transparent;
-        border: none;
-        color: #8f7650;
-        font-size: 14px;
-        cursor: pointer;
-        padding: 2px 8px;
-        border-radius: 6px;
-    "
->
-    {agendaNavCollapsed ? '▼ 展开周历' : '▲ 折叠周历'}
-</button>
-    </div>
-    
-    {#if !agendaNavCollapsed}
+    {#if agendaNavCollapsed}
+        <!-- 折叠状态：按钮均匀填满整行 -->
+        <div style="
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: nowrap;
+        ">
+            <!-- 昨天 -->
+            <button
+                type="button"
+                style="
+                    flex: 1;
+                    min-height: 28px;
+                    padding: 0 4px;
+                    border: 0;
+                    border-radius: 999px;
+                    color: {selectedAgendaDate === getDateKey(-1) ? '#3d3528' : '#8f7650'};
+                    background: {selectedAgendaDate === getDateKey(-1) ? '#f6c94c' : '#f4ecd9'};
+                    font-size: 11px;
+                    font-weight: {selectedAgendaDate === getDateKey(-1) ? '700' : '400'};
+                    cursor: pointer;
+                    white-space: nowrap;
+                    text-align: center;
+                    transition: background 0.15s;
+                "
+                onclick={() => {
+                    selectAgendaDate(getDateKey(-1));
+                }}
+                onmouseenter={() => {
+                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        event.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }
+                }}
+                onmouseleave={() => {
+                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        event.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }
+                }}
+            >
+                昨天
+            </button>
+            
+            <!-- 今天 -->
+            <button
+                type="button"
+                style="
+                    flex: 1;
+                    min-height: 28px;
+                    padding: 0 4px;
+                    border: 0;
+                    border-radius: 999px;
+                    color: {selectedAgendaDate === getDateKey(0) ? '#3d3528' : '#8f7650'};
+                    background: {selectedAgendaDate === getDateKey(0) ? '#f6c94c' : '#f4ecd9'};
+                    font-size: 11px;
+                    font-weight: {selectedAgendaDate === getDateKey(0) ? '700' : '400'};
+                    cursor: pointer;
+                    white-space: nowrap;
+                    text-align: center;
+                    transition: background 0.15s;
+                "
+                onclick={() => {
+                    selectAgendaDate(getDateKey(0));
+                }}
+                onmouseenter={() => {
+                    if (selectedAgendaDate !== getDateKey(0)) {
+                        event.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }
+                }}
+                onmouseleave={() => {
+                    if (selectedAgendaDate !== getDateKey(0)) {
+                        event.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }
+                }}
+            >
+                今天
+            </button>
+            
+            <!-- 明天 -->
+            <button
+                type="button"
+                style="
+                    flex: 1;
+                    min-height: 28px;
+                    padding: 0 4px;
+                    border: 0;
+                    border-radius: 999px;
+                    color: {selectedAgendaDate === getDateKey(1) ? '#3d3528' : '#8f7650'};
+                    background: {selectedAgendaDate === getDateKey(1) ? '#f6c94c' : '#f4ecd9'};
+                    font-size: 11px;
+                    font-weight: {selectedAgendaDate === getDateKey(1) ? '700' : '400'};
+                    cursor: pointer;
+                    white-space: nowrap;
+                    text-align: center;
+                    transition: background 0.15s;
+                "
+                onclick={() => {
+                    selectAgendaDate(getDateKey(1));
+                }}
+                onmouseenter={() => {
+                    if (selectedAgendaDate !== getDateKey(1)) {
+                        event.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }
+                }}
+                onmouseleave={() => {
+                    if (selectedAgendaDate !== getDateKey(1)) {
+                        event.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }
+                }}
+            >
+                明天
+            </button>
+            
+            <!-- 显示全部 -->
+            {#if selectedAgendaDate}
+                <button
+                    type="button"
+                    style="
+                        flex: 1;
+                        min-height: 28px;
+                        padding: 0 4px;
+                        border: 0;
+                        border-radius: 999px;
+                        color: #a36759;
+                        background: transparent;
+                        font-size: 11px;
+                        cursor: pointer;
+                        white-space: nowrap;
+                        text-align: center;
+                    "
+                    onclick={() => {
+                        selectedAgendaDate = null;
+                    }}
+                    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                    显示全部
+                </button>
+            {:else}
+                <div style="flex: 1;"></div>
+            {/if}
+            
+            <!-- 展开按钮（固定在最右边） -->
+            <button
+                type="button"
+                class="agenda-collapse-toggle"
+                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}
+                style="
+                    flex: 0 0 auto;
+                    background: transparent;
+                    border: none;
+                    color: #8f7650;
+                    font-size: 13px;
+                    cursor: pointer;
+                    padding: 2px 6px;
+                    border-radius: 6px;
+                    white-space: nowrap;
+                "
+            >
+                ▼ 展开周历
+            </button>
+        </div>
+    {:else}
+        <!-- 展开状态 -->
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
+            <button
+                type="button"
+                class="agenda-collapse-toggle"
+                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}
+                style="
+                    background: transparent;
+                    border: none;
+                    color: #8f7650;
+                    font-size: 13px;
+                    cursor: pointer;
+                    padding: 2px 6px;
+                    border-radius: 6px;
+                "
+            >
+                ▲ 折叠周历
+            </button>
+        </div>
+        
         <div class="agenda-week-actions">
             <button type="button" onclick={() => shiftAgendaWeek(-7)}>
                 {$translator("calendar.previousWeek")}
