@@ -144,9 +144,6 @@ function getDisplayDueLabel(todo: Todo) {
     void beginEdit();
   }
 
-  $: displayDueLabel = getDisplayDueLabel(todo);
-
-
   onMount(() => {
     animationDuration = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0

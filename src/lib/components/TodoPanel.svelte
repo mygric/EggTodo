@@ -1316,14 +1316,8 @@ async function toggleTodo(todo: Todo) {
     try {
         await todos.toggle(todo);
         
-        // 播放音效
-        try {
-            const audio = new Audio('/complete.mp3');
-            audio.volume = 0.5;
-            audio.play();
-        } catch (e) {
-            // 音效播放失败不影响主功能
-        }
+        // 播放音效（Web Audio API 版本）
+        playLevelUp();
         
         if (listView === 'calendar') {
             // 先刷新数据
@@ -1341,6 +1335,39 @@ async function toggleTodo(todo: Todo) {
     }
 }
 
+
+let audioCtx = null;
+let masterGain = null;
+
+function getCtx() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 1.4;
+        masterGain.connect(audioCtx.destination);
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return { ctx: audioCtx, master: masterGain };
+}
+
+function playLevelUp() {
+    try {
+        const { ctx, master } = getCtx();
+        const t = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(523, t);
+        osc.frequency.exponentialRampToValueAtTime(1318, t + 0.22);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.24, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(t);
+        osc.stop(t + 0.4);
+    } catch (e) {}
+}
 
 
   async function editTodo(
