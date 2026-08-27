@@ -1787,18 +1787,29 @@ function getDateKey(offset) {
     }
   }
 
-  async function scheduleTodo(
+// 在 scheduleTodo 函数中
+async function scheduleTodo(
     id: number,
     schedule: TodoScheduleInput,
     repeatScope: RepeatEditScope = "single",
-  ) {
+) {
     try {
-      await todos.setSchedule(id, schedule, repeatScope);
+        await todos.setSchedule(id, schedule, repeatScope);
+        
+        // ⭐ 如果当前在日历视图，刷新日历
+        if (listView === 'calendar') {
+            await todos.refresh();
+            const currentView = listView;
+            listView = 'all';
+            await tick();
+            listView = currentView;
+            agendaWeekVersion += 1;
+        }
     } catch (error) {
-      todos.reportError(error);
-      throw error;
+        todos.reportError(error);
+        throw error;
     }
-  }
+}
 
   async function snoozeTodo(todo: Todo, reminderAt: number) {
     try {

@@ -99,7 +99,34 @@ import { todos } from "$lib/stores/todoStore";
 let customIntervalValue = 3;
 let customIntervalUnit: 'days' | 'months' = 'days';
 
-  $: dueLabel = localizedDueLabel(todo);
+ $: dueLabel = localizedDueLabel(todo);
+$: displayDueLabel = getDisplayDueLabel(todo);
+
+
+function getDisplayDueLabel(todo: Todo) {
+    if (!todo.due_date && !todo.due_at) return '';
+    
+    const date = todo.due_date 
+        ? new Date(todo.due_date + 'T00:00:00')
+        : new Date(todo.due_at);
+    
+    const now = new Date();
+    const isSameYear = date.getFullYear() === now.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const time = todo.due_at 
+        ? new Date(todo.due_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+        : '';
+    
+    let result = '';
+    if (isSameYear) {
+        result = `${month}/${day}`;
+        if (time) result += ` ${time}`;
+    } else {
+        result = `${date.getFullYear()}/${month}/${day}`;
+    }
+    return result;
+}
   $: dueTone = getDueTone(todo);
   $: notePreview = todo.note?.trim() ?? "";
   $: currentGroup =
@@ -114,6 +141,9 @@ let customIntervalUnit: 'days' | 'months' = 'days';
   $: if (editRequest > 0 && !editing) {
     void beginEdit();
   }
+
+  $: displayDueLabel = getDisplayDueLabel(todo);
+
 
   onMount(() => {
     animationDuration = window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -280,13 +310,26 @@ if (date && repeatChoice !== "none") {
     }).format(new Date(reminderAt));
   }
 
-  function repeatLabel(rule: RepeatRule | null) {
+function repeatLabel(rule: RepeatRule | null) {
     if (rule === "daily") return $translator("todo.repeatDaily");
     if (rule === "weekly") return $translator("todo.repeatWeekly");
     if (rule === "monthly") return $translator("todo.repeatMonthly");
+    if (rule === "yearly") return $translator("todo.repeatYearly");
     if (rule === "weekdays") return $translator("todo.repeatWeekdays");
+    
+    // 处理自定义规则：days_3 → "每3天"
+    if (typeof rule === 'string' && rule.startsWith('days_')) {
+        const n = rule.replace('days_', '');
+        return `每${n}天`;
+    }
+    // 处理自定义规则：months_6 → "每6个月"
+    if (typeof rule === 'string' && rule.startsWith('months_')) {
+        const n = rule.replace('months_', '');
+        return `每${n}个月`;
+    }
+    
     return "";
-  }
+}
 
   function localizedDueLabel(value: Todo) {
     const label = formatDueLabel(value);
@@ -554,7 +597,7 @@ if (date && repeatChoice !== "none") {
               title={$translator("todo.setDue")}
               onclick={toggleSchedule}
             >
-              {dueTone === "overdue" ? `${$translator("todo.overdue")} ` : ""}{dueLabel}
+              {dueTone === "overdue" ? `${$translator("todo.overdue")} ` : ""}{displayDueLabel}
             </button>
           {/if}
           {#if todo.reminder_at !== null}
