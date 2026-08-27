@@ -217,6 +217,7 @@ async function toggleWindowPin() {
   let selectedAgendaDate: string | null = null;
   let agendaWeekStartAt = startOfAgendaWeek();
   let agendaWeekVersion = 0;
+  let agendaNavCollapsed = false;
   let agendaDatePickerOpen = false;
   let defaultListViewMode: DefaultListViewMode = "remember";
   let selectedGroup = "all";
@@ -2857,61 +2858,88 @@ async function deleteTodo(
           {/each}
         </div>
       {:else if listView === "calendar"}
-        <section class="agenda-nav" aria-label={$translator("nav.calendar")}>
-          <div class="agenda-week-actions">
+
+
+<section class="agenda-nav" aria-label={$translator("nav.calendar")}>
+    <!-- 折叠按钮 -->
+    <div style="display: flex; justify-content: flex-end; margin-bottom: 6px;">
+<button
+    type="button"
+    class="agenda-collapse-toggle"
+    onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}
+    style="
+        background: transparent;
+        border: none;
+        color: #8f7650;
+        font-size: 14px;
+        cursor: pointer;
+        padding: 2px 8px;
+        border-radius: 6px;
+    "
+>
+    {agendaNavCollapsed ? '▼ 展开周历' : '▲ 折叠周历'}
+</button>
+    </div>
+    
+    {#if !agendaNavCollapsed}
+        <div class="agenda-week-actions">
             <button type="button" onclick={() => shiftAgendaWeek(-7)}>
-              {$translator("calendar.previousWeek")}
+                {$translator("calendar.previousWeek")}
             </button>
             <button type="button" onclick={jumpAgendaToday}>{$translator("calendar.today")}</button>
             <button type="button" onclick={() => shiftAgendaWeek(7)}>
-              {$translator("calendar.nextWeek")}
+                {$translator("calendar.nextWeek")}
             </button>
-          </div>
-          {#key `${agendaWeekStartAt}-${agendaWeekVersion}`}
+        </div>
+        {#key `${agendaWeekStartAt}-${agendaWeekVersion}`}
             <div class="agenda-week-strip">
-              {#each agendaWeekDays() as day (day.dateKey)}
-                <button
-                  class:active={selectedAgendaDate === day.dateKey}
-                  class:today={day.dateKey === localDateString(0)}
-                  type="button"
-                  aria-pressed={selectedAgendaDate === day.dateKey}
-                  onclick={() => selectAgendaDate(day.dateKey)}
-                >
-                  <span>{day.label}</span>
-                  <strong>{day.day}</strong>
-                  <small class:visible={day.count > 0}>{day.count}</small>
-                </button>
-              {/each}
+                {#each agendaWeekDays() as day (day.dateKey)}
+                    <button
+                        class:active={selectedAgendaDate === day.dateKey}
+                        class:today={day.dateKey === localDateString(0)}
+                        type="button"
+                        aria-pressed={selectedAgendaDate === day.dateKey}
+                        onclick={() => selectAgendaDate(day.dateKey)}
+                    >
+                        <span>{day.label}</span>
+                        <strong>{day.day}</strong>
+                        <small class:visible={day.count > 0}>{day.count}</small>
+                    </button>
+                {/each}
             </div>
-          {/key}
-          <div class="agenda-jump">
+        {/key}
+        <div class="agenda-jump">
             <button
-              type="button"
-              onclick={() => (agendaDatePickerOpen = !agendaDatePickerOpen)}
+                type="button"
+                onclick={() => (agendaDatePickerOpen = !agendaDatePickerOpen)}
             >
-              {$translator("calendar.jumpDate")}
+                {$translator("calendar.jumpDate")}
             </button>
             {#if selectedAgendaDate}
-              <button
-                class="plain"
-                type="button"
-                onclick={() => (selectedAgendaDate = null)}
-              >
-                {$translator("calendar.showAll")}
-              </button>
+                <button
+                    class="plain"
+                    type="button"
+                    onclick={() => (selectedAgendaDate = null)}
+                >
+                    {$translator("calendar.showAll")}
+                </button>
             {/if}
-          </div>
-          {#if agendaDatePickerOpen}
+        </div>
+        {#if agendaDatePickerOpen}
             <input
-              class="agenda-date-picker"
-              type="date"
-              value={selectedAgendaDate ?? localDateString(0)}
-              onchange={(event) => {
-                setAgendaDateFromPicker(event.currentTarget.value);
-              }}
+                class="agenda-date-picker"
+                type="date"
+                value={selectedAgendaDate ?? localDateString(0)}
+                onchange={(event) => {
+                    setAgendaDateFromPicker(event.currentTarget.value);
+                }}
             />
-          {/if}
-        </section>
+        {/if}
+    {/if}
+</section>
+
         <div class="agenda-sections">
           {#if selectedAgendaDate}
             {#key selectedAgendaDate}
