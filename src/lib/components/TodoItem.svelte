@@ -98,6 +98,8 @@ import { todos } from "$lib/stores/todoStore";
   let animationDuration = 140;
 let customIntervalValue = 3;
 let customIntervalUnit: 'days' | 'months' = 'days';
+let anniversaryMonth = 6;
+let anniversaryDay = 1;
 
  $: dueLabel = localizedDueLabel(todo);
 $: displayDueLabel = getDisplayDueLabel(todo);
@@ -255,6 +257,8 @@ let repeatRule = null;
 if (date && repeatChoice !== "none") {
     if (repeatChoice === "custom_interval") {
         repeatRule = `${customIntervalUnit}_${customIntervalValue}`;
+    } else if (repeatChoice === "anniversary") {
+        repeatRule = `anniversary_${String(anniversaryMonth).padStart(2, '0')}_${String(anniversaryDay).padStart(2, '0')}`;
     } else {
         repeatRule = repeatChoice;
     }
@@ -316,6 +320,13 @@ function repeatLabel(rule: RepeatRule | null) {
     if (rule === "monthly") return $translator("todo.repeatMonthly");
     if (rule === "yearly") return $translator("todo.repeatYearly");
     if (rule === "weekdays") return $translator("todo.repeatWeekdays");
+
+    if (typeof rule === 'string' && rule.startsWith('anniversary_')) {
+    const parts = rule.split('_');
+    if (parts.length === 3) {
+        return `${parts[1]}月${parts[2]}日`;
+    }
+}
     
     // 处理自定义规则：days_3 → "每3天"
     if (typeof rule === 'string' && rule.startsWith('days_')) {
@@ -670,6 +681,7 @@ function repeatLabel(rule: RepeatRule | null) {
               <option value="same-day-9">{$translator("todo.reminderSameDay")}</option>
               <option value="previous-day-9">{$translator("todo.reminderPreviousDay")}</option>
               <option value="custom">{$translator("todo.reminderCustom")}</option>
+              <option value="anniversary">{$translator("todo.repeatAnniversary")}</option>
             </select>
           </label>
           {#if reminderChoice === "custom"}
@@ -693,7 +705,36 @@ function repeatLabel(rule: RepeatRule | null) {
             <option value="yearly">{$translator("todo.repeatYearly")}</option>
             <option value="custom_interval">{$translator("todo.repeatCustomInterval")}</option>
             <option value="weekdays">{$translator("todo.repeatWeekdays")}</option>
+            <option value="anniversary">{$translator("todo.repeatAnniversary")}</option>
         </select>
+
+{#if repeatChoice === 'anniversary'}
+    <select bind:value={anniversaryMonth} disabled={scheduleSaving} style="
+        padding: 5px 4px;
+        border: 1px solid #e1d5c2;
+        border-radius: 8px;
+        outline: 0;
+        font-size: 10px;
+        background: #fffdf8;
+    ">
+        {#each Array.from({length: 12}, (_, i) => i + 1) as m}
+            <option value={m}>{m}月</option>
+        {/each}
+    </select>
+    <select bind:value={anniversaryDay} disabled={scheduleSaving} style="
+        padding: 5px 4px;
+        border: 1px solid #e1d5c2;
+        border-radius: 8px;
+        outline: 0;
+        font-size: 10px;
+        background: #fffdf8;
+    ">
+        {#each Array.from({length: 31}, (_, i) => i + 1) as d}
+            <option value={d}>{d}日</option>
+        {/each}
+    </select>
+{/if}
+
         {#if repeatChoice === 'custom_interval'}
             <input
                 type="number"

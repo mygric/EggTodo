@@ -146,6 +146,7 @@ export const zhCN = {
 "todo.repeatCustomInterval": "每x天/月",
 "todo.days": "天",
 "todo.months": "个月",
+"todo.repeatAnniversary": "纪念日",
 
   "group.create": "新建分组",
   "group.newPlaceholder": "新分组",

@@ -858,9 +858,6 @@ pub fn set_todo_schedule(
     database: State<'_, Database>,
 ) -> Result<TodoEdit, String> {
 
-        // ⭐ 添加这行日志
-    println!("📝 set_todo_schedule 收到 repeat_rule: {:?}", repeat_rule);
-
     let result = {
         let mut connection = lock_database(&database)?;
         set_todo_schedule_in_connection(
@@ -2067,7 +2064,6 @@ fn set_todo_schedule_in_connection(
     repeat_rule: Option<String>,
     repeat_scope: Option<&str>,
 ) -> Result<TodoEdit, String> {
-    println!("📝 set_todo_schedule_in_connection 收到 repeat_rule: {:?}", repeat_rule);
     
     let before = find_todo(connection, id)?.ok_or_else(|| "任务不存在".to_string())?;
     let now = now_millis();
@@ -2101,9 +2097,7 @@ fn set_todo_schedule_in_connection(
             }
         } else {
             None
-        };
-        
-        println!("  repeat_next_due_date: {:?}", repeat_next_due_date);
+        };    
         
         transaction.execute(
             "
@@ -2131,8 +2125,6 @@ fn set_todo_schedule_in_connection(
         ).map_err(database_error)?;
     }
     transaction.commit().map_err(database_error)?;
-    
-    println!("💾 数据库更新完成，repeat_rule = {:?}", repeat_rule);
     
     let updated_todo = find_todo(connection, id)?.ok_or_else(|| "更新后未找到任务".to_string())?;
     Ok(TodoEdit { updated_todos: vec![updated_todo] })
@@ -2653,7 +2645,6 @@ fn create_next_repeat_instance(
     };
     
     let next_repeat_next_due_date = next_repeat_due_date(_next_due_date, rule)?;
-    println!("📝 下一次日期: {}", next_repeat_next_due_date);
     
     // ⭐ 修改这里：使用计算后的日期
     let (due_date, due_at) = if source.due_at.is_some() {
@@ -2718,9 +2709,6 @@ fn create_next_repeat_instance(
 fn next_repeat_due_date(date: &str, rule: &str) -> Result<String, String> {
     let (year, month, day) = parse_date_only(date)?;
     
-    // 先打印日志，看看收到的 rule 是什么
-    println!("🔍 计算下一次重复日期: date={}, rule='{}'", date, rule);
-    
     let next = match rule {
         "daily" => add_days(year, month, day, 1),
         "weekly" => add_days(year, month, day, 7),
@@ -2738,45 +2726,70 @@ fn next_repeat_due_date(date: &str, rule: &str) -> Result<String, String> {
             }
             candidate
         }
-        // ⭐ 处理每 N 天：格式 "days_3"
-        s if s.starts_with("days_") => {
-            if let Ok(n) = s.trim_start_matches("days_").parse::<u32>() {
-                if n > 0 {
-                    add_days(year, month, day, n)
-                } else {
-                    return Err("天数必须大于0".to_string());
+        "days_3" => add_days(year, month, day, 3),
+        "days_7" => add_days(year, month, day, 7),
+        "months_3" => {
+            let mut new_year = year;
+            let mut new_month = month + 3;
+            while new_month > 12 {
+                new_month -= 12;
+                new_year += 1;
+            }
+            let max_day = days_in_month(new_year, new_month);
+            let new_day = if day > max_day { max_day } else { day };
+            (new_year, new_month, new_day)
+        }
+        "months_6" => {
+            let mut new_year = year;
+            let mut new_month = month + 6;
+            while new_month > 12 {
+                new_month -= 12;
+                new_year += 1;
+            }
+            let max_day = days_in_month(new_year, new_month);
+            let new_day = if day > max_day { max_day } else { day };
+            (new_year, new_month, new_day)
+        }
+        // ⭐ 添加 anniversary 支持
+        _ if rule.starts_with("anniversary_") => {
+            let parts: Vec<&str> = rule.split('_').collect();
+            if parts.len() == 3 {
+                let target_month = parts[1].parse::<u32>().unwrap_or(1);
+                let target_day = parts[2].parse::<u32>().unwrap_or(1);
+                
+                let mut target_year = year;
+                let max_day = days_in_month(target_year, target_month);
+                let day = if target_day > max_day { max_day } else { target_day };
+                
+                // 检查今天是否已经过了目标日期
+                if target_month < month || (target_month == month && day <= day) {
+                    target_year += 1;
                 }
+                let max_day = days_in_month(target_year, target_month);
+                let day = if target_day > max_day { max_day } else { target_day };
+                (target_year, target_month, day)
             } else {
-                return Err(format!("无效的天数格式: {}", s));
+                return Err("无效的纪念日格式".to_string());
             }
         }
-        // ⭐ 处理每 N 个月：格式 "months_6"
-        s if s.starts_with("months_") => {
-            if let Ok(n) = s.trim_start_matches("months_").parse::<u32>() {
-                if n > 0 {
-                    let mut new_year = year;
-                    let mut new_month = month + n;
-                    while new_month > 12 {
-                        new_month -= 12;
-                        new_year += 1;
-                    }
-                    let max_day = days_in_month(new_year, new_month);
-                    let new_day = if day > max_day { max_day } else { day };
-                    (new_year, new_month, new_day)
-                } else {
-                    return Err("月数必须大于0".to_string());
-                }
-            } else {
-                return Err(format!("无效的月数格式: {}", s));
+        _ if rule.starts_with("days_") => {
+            let n = rule.trim_start_matches("days_").parse::<u32>().unwrap_or(1);
+            add_days(year, month, day, n)
+        }
+        _ if rule.starts_with("months_") => {
+            let n = rule.trim_start_matches("months_").parse::<u32>().unwrap_or(1);
+            let mut new_year = year;
+            let mut new_month = month + n;
+            while new_month > 12 {
+                new_month -= 12;
+                new_year += 1;
             }
+            let max_day = days_in_month(new_year, new_month);
+            let new_day = if day > max_day { max_day } else { day };
+            (new_year, new_month, new_day)
         }
-        _ => {
-            // ⭐ 打印未匹配的规则，帮助调试
-            println!("❌ 未匹配的重复规则: '{}'", rule);
-            return Err(format!("重复规则无效: {}", rule));
-        }
+        _ => return Err(format!("不支持的重复规则: {}", rule)),
     };
-    
     Ok(format!("{:04}-{:02}-{:02}", next.0, next.1, next.2))
 }
 
