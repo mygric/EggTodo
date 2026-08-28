@@ -1831,13 +1831,11 @@ fn set_todo_completed_in_connection(
     let updated_by = device_id(connection).map_err(database_error)?;
     let transaction = connection.transaction().map_err(database_error)?;
 
-    // ⭐ 新增：如果任务是“取消完成”并且是重复任务，先删除明天的实例
+    // 如果任务是"取消完成"并且是重复任务，先删除明天的实例
     if !completed && before.completed && before.repeat_rule.is_some() {
         if let Some(next_due_date) = before.repeat_next_due_date.as_deref() {
-            // 调用我们添加的删除函数
             delete_tomorrow_repeat_instance(&transaction, &before.title, next_due_date)?;
         }
-        // 然后继续执行正常的 UPDATE，将当前任务标记为未完成
     }
 
     let changed = transaction
@@ -1860,11 +1858,91 @@ fn set_todo_completed_in_connection(
         return Err("任务不存在".to_string());
     }
 
-    let created_id = if completed && !before.completed {
-        create_next_repeat_instance(&transaction, &before, now, &updated_by)?
+    // ⭐ 生成重复任务实例
+    let created_id = if completed && !before.completed && before.repeat_rule.is_some() {
+        // 获取今天的日期
+        let today: String = transaction
+            .query_row("SELECT date('now')", [], |row| row.get(0))
+            .map_err(database_error)?;
+        
+        // ⭐ 使用 due_date 或 due_at 来判断是否隔天超时
+        let due_date_str = if let Some(ref date) = before.due_date {
+            date.clone()
+        } else if let Some(at) = before.due_at {
+            local_date_from_timestamp(at)?
+        } else {
+            // 如果没有到期日期，默认不超时
+            today.clone()
+        };
+        
+        // ⭐ 判断是否隔天超时：到期日期 < 今天
+        let is_overdue = due_date_str < today;
+        
+        if is_overdue {
+            // 隔天超时：生成今天的任务
+            println!("📌 隔天超时（基于due_date），生成今天的任务: {}", today);
+            
+            // 直接创建今天的任务
+            let uuid = Uuid::new_v4().to_string();
+            let sort_order: i64 = transaction
+                .query_row(
+                    "
+                    SELECT COALESCE(MIN(sort_order), 1024) - 1024
+                    FROM todos
+                    WHERE deleted_at IS NULL AND archived_at IS NULL
+                    ",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(database_error)?;
+            
+            let due_at = if let Some(original_due_at) = before.due_at {
+                Some(timestamp_for_local_date(&today, Some(original_due_at))?)
+            } else {
+                None
+            };
+            
+            // ⭐ 新任务的 repeat_next_due_date 设置为今天的日期
+            let next_repeat = today.clone();
+            
+            transaction.execute(
+                "
+                INSERT INTO todos (
+                    uuid, title, note, group_uuid, completed, pinned, priority, sort_order,
+                    created_at, updated_at, completed_at, deleted_at,
+                    archived_at, due_date, due_at, reminder_at,
+                    repeat_rule, repeat_next_due_date, repeat_series_uuid, updated_by
+                )
+                VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?8, NULL, NULL, NULL, ?9, ?10, NULL, ?11, ?12, ?13, ?14)
+                ",
+                params![
+                    uuid,
+                    before.title,
+                    before.note,
+                    before.group_uuid,
+                    before.pinned,
+                    before.priority,
+                    sort_order,
+                    now,
+                    &today,
+                    due_at,
+                    before.repeat_rule,
+                    next_repeat,
+                    before.repeat_series_uuid.as_deref().unwrap_or(&before.uuid),
+                    updated_by,
+                ],
+            ).map_err(database_error)?;
+            
+            Some(transaction.last_insert_rowid())
+        } else {
+            // 正常完成：生成下一次任务
+            println!("📌 正常完成，生成下一次任务");
+            create_next_repeat_instance(&transaction, &before, now, &updated_by)?
+        }
     } else {
         None
     };
+
     transaction.commit().map_err(database_error)?;
 
     let updated_todo =
@@ -2064,6 +2142,8 @@ fn set_todo_schedule_in_connection(
     repeat_rule: Option<String>,
     repeat_scope: Option<&str>,
 ) -> Result<TodoEdit, String> {
+        // ⭐ 添加这行日志
+    println!("📝 set_todo_schedule 收到的 repeat_rule: {:?}", repeat_rule);
     
     let before = find_todo(connection, id)?.ok_or_else(|| "任务不存在".to_string())?;
     let now = now_millis();
@@ -2616,10 +2696,8 @@ fn normalize_repeat_rule(repeat_rule: Option<String>) -> Result<Option<String>, 
     if trimmed.is_empty() {
         return Ok(None);
     }
-    match trimmed {
-        "daily" | "weekly" | "monthly" | "weekdays" => Ok(Some(trimmed.to_string())),
-        _ => Err("重复规则无效".to_string()),
-    }
+    // ⭐ 允许所有规则，不再限制
+    Ok(Some(trimmed.to_string()))
 }
 
 fn normalize_repeat_edit_scope(repeat_scope: Option<&str>) -> Result<RepeatEditScope, String> {
@@ -2640,13 +2718,39 @@ fn create_next_repeat_instance(
     let Some(rule) = source.repeat_rule.as_deref() else {
         return Ok(None);
     };
-    let Some(_next_due_date) = source.repeat_next_due_date.as_deref() else {
+    
+    // ⭐ 获取当前的到期日期（用于判断是否隔天超时）
+    let due_date_str = if let Some(ref date) = source.due_date {
+        date.clone()
+    } else if let Some(at) = source.due_at {
+        local_date_from_timestamp(at)?
+    } else {
+        // 如果没有到期日期，返回 None
         return Ok(None);
     };
     
-    let next_repeat_next_due_date = next_repeat_due_date(_next_due_date, rule)?;
+    // 获取今天的日期
+    let today: String = connection
+        .query_row("SELECT date('now')", [], |row| row.get(0))
+        .map_err(database_error)?;
     
-    // ⭐ 修改这里：使用计算后的日期
+    // ⭐ 判断是否隔天超时：到期日期 < 今天
+    let is_overdue = due_date_str < today;
+    
+    println!("📌 create_next_repeat: due_date={}, today={}, is_overdue={}", due_date_str, today, is_overdue);
+    
+    // ⭐ 计算下一次日期
+    let next_repeat_next_due_date = if is_overdue {
+        // 隔天超时：生成今天的任务
+        today.clone()
+    } else {
+        // 正常完成：基于 due_date 计算 +1 天
+        // 用 due_date_str 作为基准，而不是 repeat_next_due_date
+        let result = next_repeat_due_date(&due_date_str, rule)?;
+        println!("📌 正常完成，基于 {} 计算下一次: {}", due_date_str, result);
+        result
+    };
+    
     let (due_date, due_at) = if source.due_at.is_some() {
         (
             None,
@@ -2705,6 +2809,7 @@ fn create_next_repeat_instance(
 
     Ok(Some(connection.last_insert_rowid()))
 }
+
 
 fn next_repeat_due_date(date: &str, rule: &str) -> Result<String, String> {
     let (year, month, day) = parse_date_only(date)?;
