@@ -540,10 +540,11 @@ pub(crate) fn device_id(connection: &Connection) -> rusqlite::Result<String> {
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // Use the platform-specific app data directory on Windows, macOS, and Linux.
     let directory = app.path().app_data_dir()?;
     fs::create_dir_all(&directory)?;
-    Ok(directory.join("eggdone.sqlite3"))
+    let db_path = directory.join("eggdone.sqlite3");
+    println!("📁 数据库路径: {:?}", db_path);  // 添加这行
+    Ok(db_path)
 }
 
 #[cfg(test)]

@@ -1100,6 +1100,37 @@ pub fn apply_remote_sync_document(
 #[tauri::command]
 pub fn get_sync_settings(database: State<'_, Database>) -> Result<SyncSettings, String> {
     let connection = lock_database(&database)?;
+    
+    // ⭐ 确保 sync_settings 表存在
+    connection.execute(
+        "
+        CREATE TABLE IF NOT EXISTS sync_settings (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+            endpoint TEXT NOT NULL DEFAULT '',
+            region TEXT NOT NULL DEFAULT 'us-east-1',
+            bucket TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT 'eggdone/todos.json',
+            path_style INTEGER NOT NULL DEFAULT 1 CHECK(path_style IN (0, 1)),
+            allow_http INTEGER NOT NULL DEFAULT 0 CHECK(allow_http IN (0, 1)),
+            updated_at INTEGER NOT NULL
+        )
+        ",
+        [],
+    ).map_err(|e| format!("创建 sync_settings 表失败：{}", e))?;
+    
+    // ⭐ 确保有一条默认记录
+    connection.execute(
+        "
+        INSERT OR IGNORE INTO sync_settings (
+            id, enabled, endpoint, region, bucket, object_key,
+            path_style, allow_http, updated_at
+        ) VALUES (1, 0, '', 'us-east-1', '', 'eggdone/todos.json', 1, 0, ?1)
+        ",
+        params![now_millis()],
+    ).map_err(|e| format!("插入默认同步配置失败：{}", e))?;
+    
+    // ⭐ 查询配置
     s3_sync::get_settings(&connection)
 }
 
