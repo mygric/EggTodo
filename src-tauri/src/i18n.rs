@@ -72,6 +72,13 @@ impl AppLocale {
         }
     }
 
+    pub(crate) fn tray_flyout_toggle(self) -> &'static str {
+        match self {
+            Self::ZhCn => "显示 / 隐藏悬浮窗",
+            Self::EnUs => "Show / hide floating ball",
+        }
+    }
+
     pub(crate) fn tray_about(self) -> &'static str {
         match self {
             Self::ZhCn => "关于 EggDone",

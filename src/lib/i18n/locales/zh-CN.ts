@@ -335,6 +335,8 @@ export const zhCN = {
   "settings.autostartHelp": "启动后静默驻留系统托盘",
   "settings.defaultView": "启动默认视图",
   "settings.rememberLastView": "记住上次",
+  "settings.floatingBallTitle": "桌面悬浮球",
+  "settings.floatingBallHelp": "显示常驻桌面的悬浮球，点击快速打开面板",
   "settings.focusDuration": "专注时长",
   "settings.focusDurationHelp": "新一轮番茄钟使用这里的时长，当前暂停中的会话不被打断",
   "settings.focus": "专注",

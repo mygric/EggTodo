@@ -257,7 +257,7 @@ fn snooze_reminder(app: &AppHandle, uuid: &str, reminder_at: i64) {
     if changed > 0 {
         drop(connection);
         tray::update_task_badge(app);
-        let _ = app.emit_to("main", "todos-changed", ());
+        let _ = app.emit("todos-changed", ());
     }
 }
 

@@ -349,6 +349,8 @@ export const enUS = {
   "settings.autostartHelp": "Start quietly in the system tray",
   "settings.defaultView": "Default startup view",
   "settings.rememberLastView": "Remember last view",
+  "settings.floatingBallTitle": "Floating ball",
+  "settings.floatingBallHelp": "Show a persistent floating ball to open the panel quickly",
   "settings.focusDuration": "Focus duration",
   "settings.focusDurationHelp": "New sessions use these durations without interrupting a paused session",
   "settings.focus": "Focus",

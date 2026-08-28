@@ -97,6 +97,39 @@ pub fn list_todos(database: State<'_, Database>) -> Result<Vec<Todo>, String> {
 }
 
 #[tauri::command]
+pub fn flyout_toggle_panel(app: AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    if window.is_visible().unwrap_or(false) {
+        window.hide().map_err(|error| error.to_string())?;
+    } else {
+        tray::show_panel(&app, None);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn count_today_due(database: State<'_, Database>) -> Result<u32, String> {
+    let connection = lock_database(&database)?;
+    let count = connection.query_row(
+        "
+        SELECT COUNT(*)
+        FROM todos
+        WHERE deleted_at IS NULL AND archived_at IS NULL
+            AND completed = 0
+            AND (
+                due_date <= date('now', 'localtime')
+                OR date(due_at / 1000, 'unixepoch', 'localtime') <= date('now', 'localtime')
+            )
+        ",
+        [],
+        |row| row.get::<_, u32>(0),
+    );
+    count.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn list_groups(database: State<'_, Database>) -> Result<Vec<TodoGroup>, String> {
     let connection = lock_database(&database)?;
     list_groups_from_connection(&connection)
@@ -770,7 +803,8 @@ pub fn set_todo_completed_by_uuid(
         set_todo_completed_in_connection(&mut connection, id, completed)
     };
     refresh_badge_after_success(&app, &result);
-    app.emit_to("main", "todos-changed", ())
+    // Broadcast so the always-on-top floating ball can refresh its badge too.
+    app.emit("todos-changed", ())
         .map_err(|error| error.to_string())?;
     result
 }
@@ -1300,7 +1334,7 @@ async fn sync_now_inner(
             }
         };
         tray::update_task_badge(&app);
-        let _ = app.emit_to("main", "todos-changed", ());
+        let _ = app.emit("todos-changed", ());
 
         match s3_sync::upload_document(&prepared, &merged, &todo_remote).await? {
             UploadOutcome::Success => break merged.todos.len(),
@@ -1583,6 +1617,8 @@ async fn cleanup_remote_note_assets(
 fn refresh_badge_after_success<T>(app: &AppHandle, result: &Result<T, String>) {
     if result.is_ok() {
         tray::update_task_badge(app);
+        // Broadcast to every window so the always-on-top floating ball refreshes its badge.
+        let _ = app.emit("todos-changed", ());
     }
 }
 

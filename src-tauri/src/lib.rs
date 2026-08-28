@@ -55,8 +55,9 @@ pub fn run() {
         .manage(i18n::I18nState::default())
         .manage(tray::PanelState::default())
         .manage(s3_sync::SyncRuntime::default())
+
         .setup(|app| {
-    let app_dir = app.path().app_data_dir().unwrap();
+            let app_dir = app.path().app_data_dir().unwrap();
 
             let database = db::Database::open(app.handle())?;
             app.manage(database);
@@ -67,6 +68,10 @@ pub fn run() {
             let tray_icon = tray::create_tray(app.handle())?;
             app.manage(tray_icon);
             reminders::start_reminder_scheduler(app.handle().clone());
+
+            #[cfg(desktop)]
+            create_flyout_window(app)?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -80,17 +85,35 @@ pub fn run() {
                     let _ = window.hide();
                 }
                 WindowEvent::Focused(false) if window.label() == "main" => {
-    // 如果窗口置顶，不隐藏
-    if let Ok(true) = window.is_always_on_top() {
-        return;
-    }
-    let panel_state = window.app_handle().state::<tray::PanelState>();
-    if !panel_state.handle_blur() {
-        return;
-    }
-    // Keep the process alive and treat the panel like a native tray popover.
-    let _ = window.hide();
-}
+                    // If the panel is pinned on top, keep it visible on blur.
+                    if let Ok(true) = window.is_always_on_top() {
+                        return;
+                    }
+                    // Delay the blur-to-hide by 150ms. This gives the flyout's
+                    // markPanelInteraction IPC and Focused(true) event enough time
+                    // to call mark_internal_interaction() before we decide whether
+                    // to hide. Without the delay, main hides before the flyout's
+                    // interaction is registered, so flyoutTogglePanel always sees
+                    // is_visible()==false and re-shows instead of toggling.
+                    let app_handle = window.app_handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        if let Some(win) = app_handle.get_webview_window("main") {
+                            let panel_state = app_handle.state::<tray::PanelState>();
+                            if panel_state.handle_blur() {
+                                let _ = win.hide();
+                            }
+                        }
+                    });
+                }
+                // When the floating ball gains focus (user clicked it), mark an internal
+                // interaction so the main panel's blur-to-hide is suppressed for a short
+                // window. Without this, a second click on the ball first blurs the panel
+                // (auto-hiding it), then the toggle sees it as hidden and re-shows it.
+                WindowEvent::Focused(true) if window.label() == "flyout" => {
+                    let panel_state = window.app_handle().state::<tray::PanelState>();
+                    panel_state.mark_internal_interaction();
+                }
                 _ => {}
             }
         })
@@ -156,6 +179,8 @@ pub fn run() {
             commands::download_note_asset,
             commands::delete_remote_note_asset,
             commands::sync_now,
+            commands::flyout_toggle_panel,
+            commands::count_today_due,
             data_exchange::export_todos,
             data_exchange::export_full_backup,
             data_exchange::preview_todo_import,
@@ -167,4 +192,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Creates the always-on-top floating ball window. Tauri keeps the window
+/// alive in its window registry, so it can be shown or hidden later by label.
+#[cfg(desktop)]
+fn create_flyout_window(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::{PhysicalPosition, WebviewWindowBuilder};
+
+    // ~2 cm in logical pixels (96 DPI) for the default top-right placement.
+    const DEFAULT_MARGIN_LP: f64 = 76.0;
+
+    let flyout = WebviewWindowBuilder::new(
+        app,
+        "flyout",
+        tauri::WebviewUrl::App("/flyout".into()),
+    )
+    .title("EggDone 悬浮窗")
+    .inner_size(70.0, 70.0)
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(true)
+    .transparent(true)
+    .shadow(false)
+    .build()?;
+
+    // Default position: top-right with ~2 cm margin.
+    if let Ok(Some(monitor)) = flyout.primary_monitor() {
+        let scale = monitor.scale_factor();
+        let screen = monitor.size();
+        if let Ok(win_size) = flyout.outer_size() {
+            let margin = (DEFAULT_MARGIN_LP * scale) as i32;
+            let x = screen.width as i32 - win_size.width as i32 - margin;
+            let y = margin;
+            let _ = flyout.set_position(PhysicalPosition::new(x, y));
+        }
+    }
+
+    Ok(())
 }

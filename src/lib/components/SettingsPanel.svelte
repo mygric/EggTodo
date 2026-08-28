@@ -2,6 +2,7 @@
   import {
     shortcutOptions,
     updateAutostart,
+    updateFloatingBall,
     updateShortcut,
     type DesktopSettings,
   } from "$lib/api/desktopSettings";
@@ -90,6 +91,20 @@
         autostartEnabled: actual,
         autostartError: null,
       });
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function setFloatingBallEnabled(enabled: boolean) {
+    if (busy) return;
+    busy = true;
+    error = "";
+    try {
+      const actual = await updateFloatingBall(enabled);
+      onChange({ ...settings, floatingBallEnabled: actual });
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -217,6 +232,23 @@
         <option value="calendar">{$translator("nav.calendar")}</option>
       </select>
     </label>
+
+    <div class="setting-row">
+      <div>
+        <strong>{$translator("settings.floatingBallTitle")}</strong>
+        <span>{$translator("settings.floatingBallHelp")}</span>
+      </div>
+      <label class="switch">
+        <input
+          type="checkbox"
+          checked={settings.floatingBallEnabled}
+          disabled={busy}
+          onchange={(event) =>
+            void setFloatingBallEnabled(event.currentTarget.checked)}
+        />
+        <span></span>
+      </label>
+    </div>
 
     <section class="focus-settings-section" aria-labelledby="focus-settings-title">
       <div class="setting-row focus-settings-heading">

@@ -158,6 +158,14 @@ export const todoApi = {
     return invoke<void>("hide_panel");
   },
 
+  flyoutTogglePanel(): Promise<void> {
+    return invoke<void>("flyout_toggle_panel");
+  },
+
+  countTodayDue(): Promise<number> {
+    return invoke<number>("count_today_due");
+  },
+
   openFocusWindow(): Promise<void> {
     return codedInvoke(invoke<void>("open_focus_window"), "FOCUS_UNAVAILABLE");
   },

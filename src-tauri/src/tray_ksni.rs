@@ -94,6 +94,9 @@ impl Tray for LinuxTray {
         items.push(action(locale.tray_focus_end(), |tray| {
             let _ = tray.app.emit_to("focus", "focus-end", ());
         }));
+        items.push(action(locale.tray_flyout_toggle(), |tray| {
+            tray::toggle_flyout_window(&tray.app);
+        }));
         items.push(MenuItem::Separator);
         items.push(action(locale.tray_about(), |tray| {
             tray::show_panel(&tray.app, None);

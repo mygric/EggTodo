@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
+import { getAllWindows } from "@tauri-apps/api/window";
 import {
   register,
   unregister,
@@ -11,6 +13,7 @@ import {
 
 const SHORTCUT_KEY = "eggdone-global-shortcut";
 const SHORTCUT_ENABLED_KEY = "eggdone-global-shortcut-enabled";
+const FLOATING_BALL_ENABLED_KEY = "eggdone-floating-ball-enabled";
 
 export const shortcutOptions = [
     { value: "CommandOrControl+1", label: "Ctrl + 1" }, 
@@ -24,6 +27,7 @@ export interface DesktopSettings {
   shortcut: string;
   shortcutEnabled: boolean;
   autostartEnabled: boolean;
+  floatingBallEnabled: boolean;
   shortcutError: string | null;
   autostartError: string | null;
 }
@@ -35,6 +39,8 @@ export async function initializeDesktopSettings(): Promise<DesktopSettings> {
     localStorage.getItem(SHORTCUT_KEY) ?? shortcutOptions[0].value;
   const shortcutEnabled =
     localStorage.getItem(SHORTCUT_ENABLED_KEY) !== "false";
+  const floatingBallEnabled =
+    localStorage.getItem(FLOATING_BALL_ENABLED_KEY) !== "false";
   let shortcutError: string | null = null;
   let autostartEnabled = false;
   let autostartError: string | null = null;
@@ -57,6 +63,7 @@ export async function initializeDesktopSettings(): Promise<DesktopSettings> {
     shortcut,
     shortcutEnabled: shortcutEnabled && shortcutError === null,
     autostartEnabled,
+    floatingBallEnabled,
     shortcutError,
     autostartError,
   };
@@ -118,4 +125,30 @@ function shortcutErrorMessage(error: unknown) {
 function settingErrorMessage(message: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
   return `${message}：${detail}`;
+}
+
+export async function updateFloatingBall(enabled: boolean): Promise<boolean> {
+  localStorage.setItem(FLOATING_BALL_ENABLED_KEY, String(enabled));
+  console.log("[floating-ball] updateFloatingBall called, enabled:", enabled);
+  if (isTauri()) {
+    try {
+      const windows = await getAllWindows();
+      console.log("[floating-ball] all windows:", windows.map((w) => w.label));
+      const flyout = windows.find((w) => w.label === "flyout");
+      if (flyout) {
+        if (enabled) {
+          await flyout.show();
+          console.log("[floating-ball] flyout.show() called");
+        } else {
+          await flyout.hide();
+          console.log("[floating-ball] flyout.hide() called");
+        }
+      } else {
+        console.log("[floating-ball] flyout window not found in window list");
+      }
+    } catch (error) {
+      console.error("[floating-ball] error:", error);
+    }
+  }
+  return enabled;
 }

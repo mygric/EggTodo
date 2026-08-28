@@ -222,6 +222,9 @@ fn create_tauri_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
             "focus-end" => {
                 let _ = app.emit_to("focus", "focus-end", ());
             }
+            "flyout-toggle" => {
+                toggle_flyout_window(app);
+            }
             "about" => {
                 show_panel(app, None);
                 let _ = app.emit_to("main", "show-about", ());
@@ -293,6 +296,13 @@ fn build_tray_menu(app: &AppHandle, today_task_titles: &[String]) -> tauri::Resu
     let preview_separator = PredefinedMenuItem::separator(app)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let focus_separator = PredefinedMenuItem::separator(app)?;
+    let flyout_item = MenuItem::with_id(
+        app,
+        "flyout-toggle",
+        locale.tray_flyout_toggle(),
+        true,
+        None::<&str>,
+    )?;
     let about_item = MenuItem::with_id(app, "about", locale.tray_about(), true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", locale.tray_quit(), true, None::<&str>)?;
     let preview_items = today_task_titles
@@ -321,6 +331,7 @@ fn build_tray_menu(app: &AppHandle, today_task_titles: &[String]) -> tauri::Resu
     items.push(&focus_start_item);
     items.push(&focus_toggle_item);
     items.push(&focus_end_item);
+    items.push(&flyout_item);
     items.push(&separator);
     items.push(&about_item);
     items.push(&quit_item);
@@ -674,6 +685,20 @@ fn set_pixel(rgba: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4]) {
     let index = ((y * width + x) * 4) as usize;
     if let Some(pixel) = rgba.get_mut(index..index + 4) {
         pixel.copy_from_slice(&color);
+    }
+}
+
+/// Shows or hides the always-on-top floating ball window. The window itself is
+/// created in `lib.rs`; this only flips its visibility from the tray menu.
+pub(crate) fn toggle_flyout_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("flyout") else {
+        return;
+    };
+    let visible = window.is_visible().unwrap_or(false);
+    if visible {
+        let _ = window.hide();
+    } else {
+        let _ = window.show();
     }
 }
 
