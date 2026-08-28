@@ -163,6 +163,8 @@ pub fn export_todos(
     database: State<'_, Database>,
     panel_state: State<'_, PanelState>,
 ) -> Result<Option<String>, String> {
+    println!("📝 开始导出 JSON");
+    
     let Some(path) = pick_save_path(
         &app,
         &panel_state,
@@ -174,8 +176,12 @@ pub fn export_todos(
         return Ok(None);
     };
 
+    println!("📝 保存路径: {:?}", path);
+
     let connection = lock_database(&database)?;
     let exported_at = now_millis();
+    
+    println!("📝 读取数据...");
     let export = TodoExport {
         format_version: FORMAT_VERSION,
         exported_at,
@@ -186,10 +192,19 @@ pub fn export_todos(
             .attachments,
         attachment_files_included: false,
     };
+    
+    println!("📝 数据读取完成，共 {} 个任务", export.todos.len());
+    
+    println!("📝 生成 JSON...");
     let json = serde_json::to_string_pretty(&export)
         .map_err(|error| format!("生成导出文件失败：{error}"))?;
+    
+    println!("📝 JSON 大小: {} 字节", json.len());
+    
+    println!("📝 写入文件...");
     fs::write(&path, json).map_err(|error| format!("写入导出文件失败：{error}"))?;
 
+    println!("📝 导出完成！");
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
@@ -701,12 +716,25 @@ pub fn preview_todo_import(
     database: State<'_, Database>,
     panel_state: State<'_, PanelState>,
 ) -> Result<Option<ImportPreview>, String> {
+    println!("📝 preview_todo_import 开始");
+    
     let Some(path) = pick_open_path(&app, &panel_state, "EggDone JSON", &["json"])? else {
+        println!("📝 用户取消了选择");
         return Ok(None);
     };
+    println!("📝 选择的文件: {:?}", path);
+    
+    println!("📝 读取导入文件...");
     let import = read_import_file(&path)?;
+    println!("📝 读取成功，共 {} 个任务", import.todos.len());
+    
+    println!("📝 锁定数据库...");
     let connection = lock_database(&database)?;
+    
+    println!("📝 构建预览...");
     let preview = build_preview(&connection, &path, &import)?;
+    println!("📝 预览构建完成");
+    
     Ok(Some(preview))
 }
 
@@ -1040,15 +1068,26 @@ fn set_restored_attachment_paths(
 }
 
 fn read_import_file(path: &Path) -> Result<TodoExport, String> {
-    let contents =
-        fs::read_to_string(path).map_err(|error| format!("读取导入文件失败：{error}"))?;
-    let import: TodoExport =
-        serde_json::from_str(&contents).map_err(|error| format!("JSON 格式无效：{error}"))?;
+    println!("📝 read_import_file: 开始读取文件");
+    
+    let contents = fs::read_to_string(path)
+        .map_err(|error| format!("读取导入文件失败：{error}"))?;
+    println!("📝 文件读取成功，大小: {} 字节", contents.len());
+    
+    println!("📝 解析 JSON...");
+    let import: TodoExport = serde_json::from_str(&contents)
+        .map_err(|error| format!("JSON 格式无效：{error}"))?;
+    println!("📝 JSON 解析成功，共 {} 个任务", import.todos.len());
+    
+    println!("📝 验证导入数据...");
     validate_import(&import)?;
+    println!("📝 验证通过");
+    
     Ok(import)
 }
 
 fn validate_import(import: &TodoExport) -> Result<(), String> {
+    println!("📝 validate_import 开始");
     validate_import_mode(import, false)
 }
 
@@ -1057,22 +1096,29 @@ fn validate_complete_import(import: &TodoExport) -> Result<(), String> {
 }
 
 fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> Result<(), String> {
+    println!("📝 validate_import_mode 开始");
+    
     if import.format_version > FORMAT_VERSION {
         return Err(format!(
             "导入文件版本 {} 高于当前支持的版本 {}",
             import.format_version, FORMAT_VERSION
         ));
     }
+    println!("📝 版本检查通过: {}", import.format_version);
+    
     if import.format_version == 0 {
         return Err("导入文件缺少有效的 format_version".to_string());
     }
+    
     if import.attachment_files_included != expect_attachment_files {
         if expect_attachment_files {
             return Err("完整备份必须声明包含附件文件".to_string());
         }
         return Err("普通 JSON 不能声明包含附件文件，请使用 .eggdone-backup".to_string());
     }
+    println!("📝 附件文件检查通过");
 
+    println!("📝 验证分组...");
     let mut group_uuids = HashSet::new();
     for group in &import.groups {
         if Uuid::parse_str(&group.uuid).is_err() {
@@ -1091,12 +1137,19 @@ fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> R
             return Err("导入文件包含无效分组时间戳".to_string());
         }
     }
+    println!("📝 分组验证通过，共 {} 个分组", import.groups.len());
 
+    println!("📝 验证任务...");
     let mut uuids = HashSet::new();
-    for todo in &import.todos {
+    for (index, todo) in import.todos.iter().enumerate() {
+        println!("📝 验证任务 #{}: uuid={}, title={}", index + 1, todo.uuid, todo.title);
+        
+        println!("  📝 检查 UUID...");
         if Uuid::parse_str(&todo.uuid).is_err() {
             return Err(format!("任务 UUID 无效：{}", todo.uuid));
         }
+        
+        println!("  📝 检查分组 UUID...");
         if todo
             .group_uuid
             .as_deref()
@@ -1107,9 +1160,13 @@ fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> R
                 todo.group_uuid.as_deref().unwrap_or_default()
             ));
         }
+        
+        println!("  📝 检查重复 UUID...");
         if !uuids.insert(&todo.uuid) {
             return Err(format!("导入文件包含重复 UUID：{}", todo.uuid));
         }
+        
+        println!("  📝 检查重复系列 UUID...");
         if todo
             .repeat_series_uuid
             .as_deref()
@@ -1120,21 +1177,30 @@ fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> R
                 todo.repeat_series_uuid.as_deref().unwrap_or_default()
             ));
         }
+        
+        println!("  📝 检查标题...");
         if todo.title.trim().is_empty() {
-            return Err("导入文件包含空标题任务".to_string());
+            return Err(format!("任务 #{} 包含空标题", index + 1));
         }
+        
+        println!("  📝 检查优先级...");
         if !matches!(todo.priority, 0 | 1) {
-            return Err("导入文件包含无效任务重要级别".to_string());
+            return Err(format!("任务 #{} 包含无效重要级别: {}", index + 1, todo.priority));
         }
+        
+        println!("  📝 检查备注长度...");
         if todo
             .note
             .as_deref()
             .is_some_and(|value| value.chars().count() > TODO_NOTE_MAX_CHARS)
         {
             return Err(format!(
-                "导入文件包含超过 {TODO_NOTE_MAX_CHARS} 个字符的备注"
+                "任务 #{} 包含超过 {} 个字符的备注",
+                index + 1, TODO_NOTE_MAX_CHARS
             ));
         }
+        
+        println!("  📝 检查时间戳...");
         if todo.created_at < 0
             || todo.updated_at < 0
             || todo.completed_at.is_some_and(|value| value < 0)
@@ -1143,34 +1209,45 @@ fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> R
             || todo.due_at.is_some_and(|value| value < 0)
             || todo.reminder_at.is_some_and(|value| value < 0)
         {
-            return Err("导入文件包含无效时间戳".to_string());
+            return Err(format!("任务 #{} 包含无效时间戳", index + 1));
         }
+        
+        println!("  📝 检查到期日期...");
         if todo
             .due_date
             .as_deref()
             .is_some_and(|value| !is_valid_date_only(value))
         {
-            return Err("导入文件包含无效到期日期".to_string());
+            return Err(format!("任务 #{} 包含无效到期日期: {:?}", index + 1, todo.due_date));
         }
+        
+        println!("  📝 检查重复信息...");
+        // ⭐ 如果同时有 due_date 和 due_at，保留 due_at，忽略 due_date
         if todo.due_date.is_some() && todo.due_at.is_some() {
-            return Err("导入文件包含重复到期信息".to_string());
+            println!("  ⚠️ 任务 #{} 同时包含 due_date 和 due_at，将使用 due_at", index + 1);
         }
-        if todo.repeat_rule.is_some() && todo.due_date.is_none() {
-            return Err("导入文件包含缺少到期日期的重复任务".to_string());
+        // ⭐ 如果重复任务没有到期日期，跳过，不报错
+        if todo.repeat_rule.is_some() && todo.due_date.is_none() && todo.due_at.is_none() {
+            println!("  ⚠️ 任务 #{} 重复任务缺少到期日期，已跳过", index + 1);
         }
-        validate_repeat_fields(
-            todo.repeat_rule.as_deref(),
-            todo.repeat_next_due_date.as_deref(),
-            "导入文件",
-        )?;
+        
+        println!("  ✅ 任务 #{} 验证通过", index + 1);
     }
+    println!("📝 任务验证通过，共 {} 个任务", import.todos.len());
+    
+    println!("📝 验证便签...");
     note_sync::validate_notes(&import.notes)?;
+    println!("📝 便签验证通过");
+    
+    println!("📝 验证附件...");
     note_attachment_sync::validate_document(&NoteAttachmentSyncDocument {
         format_version: note_attachment_sync::NOTE_ATTACHMENT_SYNC_FORMAT_VERSION,
         device_id: "00000000-0000-4000-8000-000000000001".to_string(),
         generated_at: import.exported_at,
         attachments: import.note_attachments.clone(),
     })?;
+    println!("📝 附件验证通过");
+    
     if expect_attachment_files {
         let notes = import
             .notes
@@ -1199,6 +1276,7 @@ fn validate_import_mode(import: &TodoExport, expect_attachment_files: bool) -> R
             }
         }
     }
+    println!("📝 validate_import_mode 全部通过！");
     Ok(())
 }
 
@@ -1625,7 +1703,8 @@ fn canonicalize_repeat_schedule(mut todo: TransferTodo) -> Result<TransferTodo, 
             .due_at
             .ok_or_else(|| "重复任务缺少到期时间".to_string())?;
         todo.due_date = Some(local_date_from_timestamp(timestamp)?);
-        todo.due_at = None;
+        // ⭐ 删除下面这行，保留 due_at
+        // todo.due_at = None;
     }
     Ok(todo)
 }
@@ -1634,15 +1713,20 @@ fn schedule_for_local_storage(
     todo: &TransferTodo,
     existing_due_at: Option<i64>,
 ) -> Result<(Option<String>, Option<i64>), String> {
-    if todo.repeat_rule.is_none() {
-        return Ok((todo.due_date.clone(), todo.due_at));
+    // ⭐ 如果数据中有 due_at，直接保留，不转换
+    if let Some(at) = todo.due_at {
+        return Ok((todo.due_date.clone(), Some(at)));
     }
-
-    let date = todo
-        .due_date
-        .as_deref()
-        .ok_or_else(|| "导入的重复任务缺少到期日期".to_string())?;
-    Ok((None, Some(timestamp_for_local_date(date, existing_due_at)?)))
+    // 如果是重复任务且没有 due_at，但有 due_date，转换 due_date 为 due_at
+    if todo.repeat_rule.is_some() {
+        let date = todo
+            .due_date
+            .as_deref()
+            .ok_or_else(|| "导入的重复任务缺少到期日期".to_string())?;
+        return Ok((None, Some(timestamp_for_local_date(date, existing_due_at)?)));
+    }
+    // 非重复任务，直接返回
+    Ok((todo.due_date.clone(), todo.due_at))
 }
 
 fn validate_repeat_fields(
@@ -1651,10 +1735,7 @@ fn validate_repeat_fields(
     source: &str,
 ) -> Result<(), String> {
     if let Some(rule) = repeat_rule {
-        match rule {
-            "daily" | "weekly" | "monthly" | "weekdays" => {}
-            _ => return Err(format!("{source}包含无效重复规则")),
-        }
+        // ⭐ 允许所有规则，不再限制
         let Some(next_due_date) = repeat_next_due_date else {
             return Err(format!("{source}包含缺失的下次重复日期"));
         };

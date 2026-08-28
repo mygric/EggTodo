@@ -1831,11 +1831,19 @@ fn set_todo_completed_in_connection(
     let updated_by = device_id(connection).map_err(database_error)?;
     let transaction = connection.transaction().map_err(database_error)?;
 
-    // 如果任务是"取消完成"并且是重复任务，先删除明天的实例
+    // ⭐ 如果任务是"取消完成"并且是重复任务，删除所有后续未完成的任务
     if !completed && before.completed && before.repeat_rule.is_some() {
-        if let Some(next_due_date) = before.repeat_next_due_date.as_deref() {
-            delete_tomorrow_repeat_instance(&transaction, &before.title, next_due_date)?;
-        }
+        let series_uuid = before.repeat_series_uuid.as_deref().unwrap_or(&before.uuid);
+        transaction.execute(
+            "DELETE FROM todos 
+             WHERE repeat_series_uuid = ?1 
+             AND id != ?2
+             AND completed = 0
+             AND deleted_at IS NULL
+             AND archived_at IS NULL",
+            params![series_uuid, id],
+        ).map_err(|e| e.to_string())?;
+        println!("📌 删除了重复系列中所有后续未完成任务");
     }
 
     let changed = transaction
@@ -1852,18 +1860,18 @@ fn set_todo_completed_in_connection(
             ",
             params![completed, now, updated_by, id],
         )
-        .map_err(database_error)?;
+        .map_err(|e| e.to_string())?;
 
     if changed == 0 {
         return Err("任务不存在".to_string());
     }
 
-    // ⭐ 生成重复任务实例
+    // ⭐ 生成重复任务实例（仅在完成任务时）
     let created_id = if completed && !before.completed && before.repeat_rule.is_some() {
         // 获取今天的日期
         let today: String = transaction
             .query_row("SELECT date('now')", [], |row| row.get(0))
-            .map_err(database_error)?;
+            .map_err(|e| e.to_string())?;
         
         // ⭐ 使用 due_date 或 due_at 来判断是否隔天超时
         let due_date_str = if let Some(ref date) = before.due_date {
@@ -1894,7 +1902,7 @@ fn set_todo_completed_in_connection(
                     [],
                     |row| row.get(0),
                 )
-                .map_err(database_error)?;
+                .map_err(|e| e.to_string())?;
             
             let due_at = if let Some(original_due_at) = before.due_at {
                 Some(timestamp_for_local_date(&today, Some(original_due_at))?)
@@ -1931,7 +1939,7 @@ fn set_todo_completed_in_connection(
                     before.repeat_series_uuid.as_deref().unwrap_or(&before.uuid),
                     updated_by,
                 ],
-            ).map_err(database_error)?;
+            ).map_err(|e| e.to_string())?;
             
             Some(transaction.last_insert_rowid())
         } else {
@@ -1943,7 +1951,7 @@ fn set_todo_completed_in_connection(
         None
     };
 
-    transaction.commit().map_err(database_error)?;
+    transaction.commit().map_err(|e| e.to_string())?;
 
     let updated_todo =
         find_todo(connection, id)?.ok_or_else(|| "更新后未能读取任务".to_string())?;
