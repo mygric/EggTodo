@@ -25,9 +25,28 @@ export function filterTodos(
     if (typeof groupUuid === "string" && todo.group_uuid !== groupUuid) {
       return false;
     }
-    if (view === "today" && !isDueTodayOrOverdue(todo, now)) return false;
+    if (view === "today") {
+      if (todo.completed) {
+        // 已完成任务：只有今天完成的才显示在今天视图里
+        if (!showCompleted) return false;
+        if (!isCompletedToday(todo, now)) return false;
+      } else {
+        // 未完成任务：今天到期或逾期
+        if (!isDueTodayOrOverdue(todo, now)) return false;
+      }
+    }
     if (!showCompleted && todo.completed) return false;
     if (!normalizedQuery) return true;
     return todo.title.toLocaleLowerCase().includes(normalizedQuery);
   });
+}
+
+function isCompletedToday(todo: Todo, now: Date): boolean {
+  if (todo.completed_at === null) return false;
+  const completed = new Date(todo.completed_at);
+  return (
+    completed.getFullYear() === now.getFullYear() &&
+    completed.getMonth() === now.getMonth() &&
+    completed.getDate() === now.getDate()
+  );
 }

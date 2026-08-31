@@ -54,6 +54,7 @@ pub struct Todo {
     repeat_rule: Option<String>,
     repeat_next_due_date: Option<String>,
     repeat_series_uuid: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -101,11 +102,129 @@ pub fn flyout_toggle_panel(app: AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("main") else {
         return Ok(());
     };
-    if window.is_visible().unwrap_or(false) {
+    let panel_state = app.state::<tray::PanelState>();
+
+    // If a blur-to-hide just happened, force-show on the next toggle regardless
+    // of the visibility state. This works around stale maintained/is_visible
+    // states after a programmatic hide on a transparent window.
+    if panel_state.consume_force_show_next() {
+        tray::show_panel(&app, None);
+        return Ok(());
+    }
+
+    // Cross-check maintained state with actual window visibility. Only hide
+    // when BOTH sources agree the window is visible. After a blur-to-hide,
+    // either source can return a stale "true", so if either says "hidden"
+    // we show the window.
+    let maintained_visible = panel_state.get_panel_visible(&app);
+    let actual_visible = window.is_visible().unwrap_or(false);
+
+    if maintained_visible && actual_visible {
         window.hide().map_err(|error| error.to_string())?;
+        panel_state.set_panel_visible(false);
     } else {
         tray::show_panel(&app, None);
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_flyout_ignore_cursor(app: AppHandle, ignore: bool) -> Result<(), String> {
+    let Some(flyout) = app.get_webview_window("flyout") else {
+        return Ok(());
+    };
+    // set_ignore_cursor_events(true) makes the entire window click-through —
+    // mouse events pass through to windows below. false restores normal input.
+    let _ = flyout.set_ignore_cursor_events(ignore);
+    Ok(())
+}
+
+/// Plays the task-complete "ding" sound directly via the Windows API,
+/// bypassing WebView2's audio pipeline which has ~200ms latency.
+/// The WAV data is generated in memory and played with SND_ASYNC so it
+/// doesn't block the UI thread.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn play_complete_sound() -> Result<(), String> {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+    use windows::core::PCWSTR;
+
+    // Generate a short "ding" WAV in memory: 16-bit PCM, mono, 44100 Hz.
+    // Frequency ramps from 880Hz to 1568Hz over 80ms, then holds; exponential
+    // decay envelope over 200ms total.
+    let sample_rate: u32 = 44100;
+    let duration: f64 = 0.2;
+    let length = (sample_rate as f64 * duration) as usize;
+    let f0: f64 = 880.0;
+    let f1: f64 = 1568.0;
+    let ramp_end: f64 = 0.08;
+
+    let mut samples: Vec<i16> = Vec::with_capacity(length);
+    for i in 0..length {
+        let t = i as f64 / sample_rate as f64;
+        let freq = if t < ramp_end {
+            f0 * (f1 / f0).powf(t / ramp_end)
+        } else {
+            f1
+        };
+        let phase = (t * freq) % 1.0;
+        let triangle = if phase < 0.5 {
+            4.0 * phase - 1.0
+        } else {
+            3.0 - 4.0 * phase
+        };
+        let env = 0.5 * (0.001_f64 / 0.5_f64).powf(t / duration);
+        let sample = (triangle * env * 32767.0).round();
+        samples.push(sample.clamp(-32767.0, 32767.0) as i16);
+    }
+
+    // Build WAV file in memory
+    let bytes_per_sample: u16 = 2;
+    let block_align: u16 = bytes_per_sample; // mono
+    let byte_rate: u32 = sample_rate * block_align as u32;
+    let data_size: u32 = (length * bytes_per_sample as usize) as u32;
+    let file_size: u32 = 36 + data_size;
+
+    let mut wav: Vec<u8> = Vec::with_capacity(44 + data_size as usize);
+    // RIFF header
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    // fmt chunk
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    // data chunk
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    for &s in &samples {
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+
+    // Play from memory with SND_ASYNC so it doesn't block
+    unsafe {
+        let ptr = wav.as_ptr() as *const u16;
+        let _ = PlaySoundW(
+            PCWSTR(ptr),
+            HMODULE(std::ptr::null_mut()),
+            SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+        );
+    }
+    // Keep wav alive until PlaySound finishes (SND_ASYNC copies the data
+    // internally, but we keep it in scope for safety)
+    std::mem::forget(wav);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub fn play_complete_sound() -> Result<(), String> {
     Ok(())
 }
 
@@ -881,6 +1000,61 @@ pub fn set_todo_priority(
 }
 
 #[tauri::command]
+pub fn set_todo_url(
+    id: i64,
+    url: Option<String>,
+    app: AppHandle,
+    database: State<'_, Database>,
+) -> Result<Todo, String> {
+    let result = {
+        let connection = lock_database(&database)?;
+        set_todo_url_in_connection(&connection, id, url)
+    };
+    refresh_badge_after_success(&app, &result);
+    result
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    let target = url.trim();
+    if target.is_empty() {
+        return Err("网址不能为空".to_string());
+    }
+    // 确保有协议前缀
+    let full_url = if target.starts_with("http://") || target.starts_with("https://") {
+        target.to_string()
+    } else {
+        format!("https://{}", target)
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &full_url])
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&full_url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&full_url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_todo_schedule(
     id: i64,
     due_date: Option<String>,
@@ -994,8 +1168,11 @@ pub fn archive_completed_todos(
 }
 
 #[tauri::command]
-pub fn hide_panel(window: WebviewWindow) -> Result<(), String> {
-    window.hide().map_err(|error| error.to_string())
+pub fn hide_panel(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    window.hide().map_err(|error| error.to_string())?;
+    // Update authoritative visibility so the flyout toggle stays in sync.
+    app.state::<tray::PanelState>().set_panel_visible(false);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1111,7 +1288,12 @@ pub fn mark_panel_interaction(panel_state: State<'_, PanelState>) {
 
 #[tauri::command]
 pub fn toggle_panel_from_shortcut(app: AppHandle) {
-    if crate::tray::toggle_panel(&app, None) {
+    // Mark an internal interaction so the panel doesn't auto-hide from the
+    // focus blur caused by the global shortcut key still being held down.
+    app.state::<crate::tray::PanelState>().mark_internal_interaction();
+    // Shortcuts must always toggle the panel; skip the tray-blur suppression
+    // which is only meant for tray icon clicks.
+    if crate::tray::toggle_panel(&app, None, true) {
         let _ = app.emit_to("main", "focus-new-todo", ());
     }
 }
@@ -1645,7 +1827,7 @@ fn list_todos_from_connection(connection: &Connection) -> Result<Vec<Todo>, Stri
                 id, uuid, title, note, group_uuid, completed, pinned, priority, sort_order,
                 created_at, updated_at, completed_at, deleted_at, archived_at,
                 due_date, due_at, reminder_at,
-                repeat_rule, repeat_next_due_date, repeat_series_uuid
+                repeat_rule, repeat_next_due_date, repeat_series_uuid, url
             FROM todos
             WHERE deleted_at IS NULL AND archived_at IS NULL
             ORDER BY completed ASC, pinned DESC, sort_order ASC, created_at DESC, uuid DESC
@@ -1986,9 +2168,9 @@ fn set_todo_completed_in_connection(
                     uuid, title, note, group_uuid, completed, pinned, priority, sort_order,
                     created_at, updated_at, completed_at, deleted_at,
                     archived_at, due_date, due_at, reminder_at,
-                    repeat_rule, repeat_next_due_date, repeat_series_uuid, updated_by
+                    repeat_rule, repeat_next_due_date, repeat_series_uuid, url, updated_by
                 )
-                VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?8, NULL, NULL, NULL, ?9, ?10, NULL, ?11, ?12, ?13, ?14)
+                VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?8, NULL, NULL, NULL, ?9, ?10, NULL, ?11, ?12, ?13, ?14, ?15)
                 ",
                 params![
                     uuid,
@@ -2004,6 +2186,7 @@ fn set_todo_completed_in_connection(
                     before.repeat_rule,
                     next_repeat,
                     before.repeat_series_uuid.as_deref().unwrap_or(&before.uuid),
+                    before.url,
                     updated_by,
                 ],
             ).map_err(|e| e.to_string())?;
@@ -2174,6 +2357,36 @@ fn set_todo_priority_in_connection(
     }
 
     find_todo(connection, id)?.ok_or_else(|| "更新重要级别后未能读取任务".to_string())
+}
+
+fn set_todo_url_in_connection(
+    connection: &Connection,
+    id: i64,
+    url: Option<String>,
+) -> Result<Todo, String> {
+    let url = url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    let changed = connection
+        .execute(
+            "
+            UPDATE todos
+            SET url = ?1, updated_at = ?2, updated_by = ?3
+            WHERE id = ?4 AND deleted_at IS NULL
+              AND archived_at IS NULL
+            ",
+            params![
+                url,
+                now_millis(),
+                device_id(connection).map_err(database_error)?,
+                id
+            ],
+        )
+        .map_err(database_error)?;
+
+    if changed == 0 {
+        return Err("任务不存在".to_string());
+    }
+
+    find_todo(connection, id)?.ok_or_else(|| "更新网址后未能读取任务".to_string())
 }
 
 fn days_to_ymd(days: i32) -> (i32, u32, u32) {
@@ -2496,7 +2709,7 @@ fn find_todo(connection: &Connection, id: i64) -> Result<Option<Todo>, String> {
                 id, uuid, title, note, group_uuid, completed, pinned, priority, sort_order,
                 created_at, updated_at, completed_at, deleted_at, archived_at,
                 due_date, due_at, reminder_at,
-                repeat_rule, repeat_next_due_date, repeat_series_uuid
+                repeat_rule, repeat_next_due_date, repeat_series_uuid, url
             FROM todos
             WHERE id = ?1
             ",
@@ -2616,6 +2829,7 @@ fn map_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Todo> {
         repeat_rule: row.get(17)?,
         repeat_next_due_date: row.get(18)?,
         repeat_series_uuid: row.get(19)?,
+        url: row.get(20)?,
     })
 }
 
@@ -2859,9 +3073,9 @@ fn create_next_repeat_instance(
                 uuid, title, note, group_uuid, completed, pinned, priority, sort_order,
                 created_at, updated_at, completed_at, deleted_at,
                 archived_at, due_date, due_at, reminder_at,
-                repeat_rule, repeat_next_due_date, repeat_series_uuid, updated_by
+                repeat_rule, repeat_next_due_date, repeat_series_uuid, url, updated_by
             )
-            VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?8, NULL, NULL, NULL, ?9, ?10, NULL, ?11, ?12, ?13, ?14)
+            VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?8, NULL, NULL, NULL, ?9, ?10, NULL, ?11, ?12, ?13, ?14, ?15)
             ",
             params![
                 uuid,
@@ -2877,6 +3091,7 @@ fn create_next_repeat_instance(
                 rule,
                 next_repeat_next_due_date,
                 repeat_series_uuid,
+                source.url,
                 updated_by,
             ],
         )

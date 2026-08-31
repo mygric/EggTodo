@@ -136,6 +136,18 @@ export function createTodoStore(api = todoApi, onChanged = scheduleAutoSync) {
       onChanged();
     },
 
+    async setUrl(id: number, url: string | null) {
+      const updatedTodo = await api.setUrl(id, url);
+      update((state) => ({
+        ...state,
+        items: state.items
+          .map((item) => (item.id === updatedTodo.id ? updatedTodo : item))
+          .sort(sortTodos),
+        error: null,
+      }));
+      onChanged();
+    },
+
     async addGroup(name: string) {
       const group = await api.createGroup(name);
       update((state) => ({

@@ -57,6 +57,7 @@ footer {
 .panel-header {
   justify-content: space-between;
   margin-bottom: 18px;
+  -webkit-app-region: drag;
 }
 
 .brand {
@@ -67,6 +68,7 @@ footer {
   display: flex;
   align-items: center;
   gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .brand h1 {
@@ -2144,6 +2146,49 @@ footer {
   cursor: pointer;
 }
 
+.completed-time-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 999px;
+  color: #4a7c59;
+  background: #e0f0e4;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.completed-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: #9b8b6e;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.completed-section-divider:hover {
+  color: #6b5b3e;
+}
+
+.divider-arrow {
+  font-size: 10px;
+  width: 12px;
+  display: inline-block;
+}
+
+.todo-row-completed {
+  opacity: 0.75;
+}
+
 .pin-badge,
 .priority-badge {
   display: inline-flex;
@@ -2453,6 +2498,49 @@ body:has(.todo-item.dragging) * {
   text-decoration-color: #a99b85;
 }
 
+/* 完成任务时的弹跳缩放动画 */
+.todo-item.bounce-complete {
+  animation: todoBounceComplete 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+  will-change: transform;
+}
+@keyframes todoBounceComplete {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.06); }
+  60% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
+/* 完成任务后的折叠消失动画：高度塌陷 + 淡出，下面的任务自然顶上来 */
+.todo-item.collapse-complete {
+  animation: todoCollapseComplete 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  overflow: hidden;
+  will-change: max-height, opacity, margin, transform;
+}
+@keyframes todoCollapseComplete {
+  0% {
+    max-height: 200px;
+    opacity: 1;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    transform: scaleY(1) translateY(0);
+  }
+  40% {
+    opacity: 0.6;
+    transform: scaleY(0.95) translateY(-2px);
+  }
+  100% {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    transform: scaleY(0.85) translateY(-4px);
+  }
+}
+
 .edit-area {
   min-width: 0;
   flex: 1;
@@ -2605,6 +2693,36 @@ body:has(.todo-item.dragging) * {
   gap: 1px;
 }
 
+/* 已完成任务：按钮靠上对齐，形成清晰的双排布局
+   第一排：标题 + 按钮；第二排：完成时间/截止时间/重复规则 */
+.todo-item.completed .item-actions {
+  align-self: flex-start;
+  margin-top: -2px;
+}
+
+/* 已完成任务：增加一点高度，避免内容拥挤 */
+.todo-item.completed {
+  padding-bottom: 13px;
+  min-height: 52px;
+}
+
+/* 已完成任务：meta 信息和网址按钮垂直右对齐 */
+.todo-item.completed .todo-content {
+  display: flex;
+  flex-direction: column;
+}
+.todo-item.completed .todo-meta {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  box-sizing: border-box;
+}
+
+/* 已完成任务：完成时间+重复规则靠右并对齐网址按钮右边缘，截止日期默认靠左 */
+.todo-item.completed .todo-meta .completed-time-badge {
+  margin-left: auto;
+}
+
 .more-button {
   width: 26px;
   height: 28px;
@@ -2627,6 +2745,44 @@ body:has(.todo-item.dragging) * {
   width: 15px;
   fill: currentColor;
   stroke: none;
+}
+
+.url-button {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  color: #5b8def;
+  opacity: 0.75;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  transform: translateX(-2px);
+  transition:
+    color 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.url-button:hover {
+  opacity: 1;
+  transform: translateX(-2px) scale(1.15);
+}
+
+.url-button:active {
+  transform: translateX(-2px) scale(0.95);
+}
+
+.url-button svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .actions-menu {

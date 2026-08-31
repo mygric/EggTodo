@@ -122,6 +122,8 @@ function createApi(initialItems: Todo[] = []) {
     updateFocusTrayTooltip: vi.fn(async () => undefined),
     restoreTrayTaskTooltip: vi.fn(async () => undefined),
     markPanelInteraction: vi.fn(async () => undefined),
+    flyoutTogglePanel: vi.fn(async () => undefined),
+    countTodayDue: vi.fn(async () => 0),
   };
   return api;
 }

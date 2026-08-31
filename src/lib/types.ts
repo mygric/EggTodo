@@ -19,6 +19,7 @@ export interface Todo {
   repeat_rule: RepeatRule | null;
   repeat_next_due_date: string | null;
   repeat_series_uuid: string | null;
+  url: string | null;
 }
 
 export type RepeatRule = 

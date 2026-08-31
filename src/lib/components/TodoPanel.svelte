@@ -1,14 +1,15 @@
 <script lang="ts">
-import { getAllWindows } from "@tauri-apps/api/window";
+import { getAllWindows, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
   import { isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { flip } from "svelte/animate";
   import { onMount, tick } from "svelte";
+  import { get } from "svelte/store";
   import packageMetadata from "../../../package.json";
 
   import { languageState, translator } from "$lib/i18n";
   import { localizedErrorMessage } from "$lib/i18n/errors";
+  import { playCompleteSound } from "$lib/utils/sound";
   import { todoApi } from "$lib/api/todoApi";
   import type { TodoScheduleInput } from "$lib/api/todoApi";
   import {
@@ -151,6 +152,8 @@ import { getAllWindows } from "@tauri-apps/api/window";
   let showDataManager = false;
   let showSettings = false;
   let showFocus = false;
+  let urlEditTodo: Todo | null = null;
+  let urlDraft = "";
   let focusDurations: FocusDurations = getFocusDurations();
   let focusPhase: FocusPhase = "focus";
   let focusRunning = false;
@@ -215,7 +218,7 @@ async function toggleWindowPin() {
   let noteAttachmentUndoTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedQuadrant: QuadrantKey | "all" = "all";
   let selectedAgendaDate: string | null = null;
-  let agendaWeekStartAt = startOfAgendaWeek();
+  let agendaCenterOffset = 0;
   let agendaWeekVersion = 0;
   let agendaNavCollapsed = true;
   let agendaDatePickerOpen = false;
@@ -280,7 +283,16 @@ async function toggleWindowPin() {
     view: listView === "notes" ? "all" : listView,
     groupUuid: activeGroupUuid,
   });
-  $: renderedTodos = applyPreviewOrder(filteredTodos, previewOrderIds);
+  $: renderedTodos = applyPreviewOrder(
+    listView === "today" ? sortTodayTodos(filteredTodos) : filteredTodos,
+    previewOrderIds,
+  );
+  let completedSectionOpen = true;
+  $: incompleteTodos = renderedTodos.filter((t) => !t.completed);
+  $: completedTodos = renderedTodos.filter((t) => t.completed);
+  function toggleCompletedSection() {
+    completedSectionOpen = !completedSectionOpen;
+  }
   $: batchSelectedTodos = renderedTodos.filter((todo) =>
     batchSelectedIds.has(todo.id),
   );
@@ -337,6 +349,9 @@ async function toggleWindowPin() {
       : "/focus-illustration.png";
 
   onMount(() => {
+    // 主窗口大小和位置的持久化由 Rust 侧负责（window_state.json），
+    // 前端不再保存/恢复，避免双重恢复冲突。
+
     const unlisteners: UnlistenFn[] = [];
     let mounted = true;
     const groupResizeObserver = new ResizeObserver(updateGroupScrollState);
@@ -537,7 +552,7 @@ getAllWindows().then((allWindows) => {
     }
     if (view !== "calendar") {
       selectedAgendaDate = null;
-      agendaWeekStartAt = startOfAgendaWeek();
+      agendaCenterOffset = 0;
       agendaWeekVersion += 1;
       agendaDatePickerOpen = false;
     }
@@ -1069,6 +1084,20 @@ getAllWindows().then((allWindows) => {
     }
   }
 
+  // During a drag (pointer button held down + moving), keep marking interactions
+  // on a throttle so the Rust side never fires blur-to-hide mid-gesture. This
+  // is a second layer of defence alongside the Resized/Moved event handlers.
+  let lastDragMarkTime = 0;
+  function handlePointerMove(event: PointerEvent) {
+    if (event.buttons === 0) return; // not dragging
+    const now = Date.now();
+    if (now - lastDragMarkTime < 500) return; // throttle
+    lastDragMarkTime = now;
+    if (isTauri()) {
+      void todoApi.markPanelInteraction().catch(() => {});
+    }
+  }
+
   function applyTheme(nextTheme: Theme) {
     document.documentElement.dataset.theme = nextTheme;
     document
@@ -1314,11 +1343,49 @@ async function addTodo() {
 
 async function toggleTodo(todo: Todo) {
     try {
+        const wasCompleted = todo.completed;
+        // 音效已在 TodoItem.svelte 的 onclick 里同步播放，避免 async 函数微任务延迟
+
+        if (!wasCompleted) {
+            // 完成任务：先在原位置播放弹跳动画 + 粒子喷溅，不立即移动到已完成区域
+            const el = document.querySelector(`[data-todo-id="${todo.id}"]`) as HTMLElement | null;
+            if (el) {
+                el.classList.add('bounce-complete');
+                // 弹跳动画 450ms 结束后，开始折叠消失动画
+                setTimeout(() => {
+                    el.classList.remove('bounce-complete');
+                    el.classList.add('collapse-complete');
+                }, 450);
+            }
+            // 粒子喷溅特效（从复选框位置喷出）
+            spawnCompleteParticles(todo.id);
+            // 等待弹跳(450ms) + 折叠(300ms) 动画结束后再更新 store
+            await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+
         await todos.toggle(todo);
-        
-        // 播放音效（Web Audio API 版本）
-        playLevelUp();
-        
+
+        // 检测今天所有任务是否都完成了，如果是触发全屏撒花
+        if (!wasCompleted) {
+            const todosValue = get(todos);
+            const today = localDateString(0);
+            // 直接判断截止日期，不过滤已完成任务
+            const isTodayTask = (t: Todo) => {
+                if (t.due_date) {
+                    return t.due_date <= today;
+                }
+                if (t.due_at !== null) {
+                    return localDateString(0, new Date(t.due_at)) <= today;
+                }
+                return false;
+            };
+            const todayTotal = todosValue.items.filter(isTodayTask).length;
+            const todayIncomplete = todosValue.items.filter((t) => isTodayTask(t) && !t.completed).length;
+            if (todayTotal > 0 && todayIncomplete === 0) {
+                triggerAllDoneConfetti();
+            }
+        }
+
         if (listView === 'calendar') {
             // 先刷新数据
             await todos.refresh();
@@ -1335,38 +1402,66 @@ async function toggleTodo(todo: Todo) {
     }
 }
 
-
-let audioCtx = null;
-let masterGain = null;
-
-function getCtx() {
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        masterGain = audioCtx.createGain();
-        masterGain.gain.value = 1.4;
-        masterGain.connect(audioCtx.destination);
+// 完成任务时的粒子喷溅特效
+function spawnCompleteParticles(todoId: number) {
+    const el = document.querySelector(`[data-todo-id="${todoId}"]`);
+    if (!el) return;
+    // 找到任务项里的复选框元素，以它的中心为粒子喷溅原点
+    const checkbox = el.querySelector('.checkbox');
+    const target = checkbox ?? el;
+    const rect = target.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2 - 13;
+    const cy = rect.top + rect.height / 2 - 5;
+    const colors = ['#4CAF50','#FF9800','#2196F3','#E91E63','#FFC107','#9C27B0','#8BC34A'];
+    for (let i = 0; i < 14; i++) {
+        const p = document.createElement('div');
+        const size = 4 + Math.random() * 5;
+        p.style.cssText = `position:fixed;left:${cx}px;top:${cy}px;width:${size}px;height:${size}px;border-radius:50%;background:${colors[Math.floor(Math.random()*colors.length)]};pointer-events:none;z-index:99998;`;
+        document.body.appendChild(p);
+        const angle = (Math.PI * 2 * i) / 14 + (Math.random() - 0.5) * 0.6;
+        const dist = 25 + Math.random() * 45;
+        p.animate([
+            { transform: 'translate(0,0) scale(1)', opacity: 1 },
+            { transform: `translate(${Math.cos(angle)*dist}px,${Math.sin(angle)*dist}px) scale(0)`, opacity: 0 }
+        ], { duration: 450 + Math.random() * 200, easing: 'cubic-bezier(0.4,0,0.2,1)', fill: 'forwards' });
+        setTimeout(() => p.remove(), 700);
     }
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    return { ctx: audioCtx, master: masterGain };
 }
 
-function playLevelUp() {
-    try {
-        const { ctx, master } = getCtx();
-        const t = ctx.currentTime;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(523, t);
-        osc.frequency.exponentialRampToValueAtTime(1318, t + 0.22);
-        gain.gain.setValueAtTime(0, t);
-        gain.gain.linearRampToValueAtTime(0.24, t + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-        osc.connect(gain);
-        gain.connect(master);
-        osc.start(t);
-        osc.stop(t + 0.4);
-    } catch (e) {}
+// 完成当天所有任务时的全屏撒花 + 文字提示
+function triggerAllDoneConfetti() {
+    const colors = ['#4CAF50','#FF9800','#2196F3','#E91E63','#FFC107','#9C27B0','#00BCD4','#FF5722','#8BC34A'];
+    // 创建全屏遮罩
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:99999;overflow:hidden;';
+    document.body.appendChild(overlay);
+    // 撒花
+    for (let i = 0; i < 120; i++) {
+        const c = document.createElement('div');
+        const size = 6 + Math.random() * 8;
+        c.style.cssText = `position:absolute;width:${size}px;height:${size*1.4}px;top:-20px;left:${Math.random()*100}%;background:${colors[Math.floor(Math.random()*colors.length)]};border-radius:2px;pointer-events:none;`;
+        overlay.appendChild(c);
+        const duration = 2 + Math.random() * 2;
+        const delay = Math.random() * 0.8;
+        c.animate([
+            { transform: 'translateY(0) rotate(0deg)', opacity: 1 },
+            { transform: `translateY(100vh) rotate(${720 + Math.random()*360}deg)`, opacity: 0.7 }
+        ], { duration: duration * 1000, easing: 'linear', delay: delay * 1000, fill: 'forwards' });
+    }
+    // "全部完成！"文字
+    const msg = document.createElement('div');
+    msg.textContent = '🎉 全部完成！';
+    msg.style.cssText = 'position:fixed;top:38%;left:50%;transform:translate(-50%,-50%) scale(0);font-size:42px;font-weight:700;color:#4CAF50;z-index:100000;pointer-events:none;text-shadow:0 2px 20px rgba(0,0,0,0.15);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+    document.body.appendChild(msg);
+    msg.animate([
+        { transform: 'translate(-50%,-50%) scale(0)', opacity: 0 },
+        { transform: 'translate(-50%,-50%) scale(1.2)', opacity: 1, offset: 0.2 },
+        { transform: 'translate(-50%,-50%) scale(1)', opacity: 1, offset: 0.35 },
+        { transform: 'translate(-50%,-50%) scale(1)', opacity: 1, offset: 0.8 },
+        { transform: 'translate(-50%,-50%) scale(0.8)', opacity: 0 }
+    ], { duration: 1800, easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)', fill: 'forwards' });
+    // 清理
+    setTimeout(() => { overlay.remove(); msg.remove(); }, 4000);
 }
 
 
@@ -1410,6 +1505,24 @@ function playLevelUp() {
     } catch (error) {
       todos.reportError(error);
     }
+  }
+
+  function setTodoUrl(todo: Todo) {
+    urlEditTodo = todo;
+    urlDraft = todo.url ?? "";
+  }
+
+  function cancelUrlEdit() {
+    urlEditTodo = null;
+    urlDraft = "";
+  }
+
+  function saveUrlEdit() {
+    if (!urlEditTodo) return;
+    const trimmed = urlDraft.trim();
+    const url = trimmed === "" ? null : trimmed;
+    todos.setUrl(urlEditTodo.id, url).catch((error) => todos.reportError(error));
+    cancelUrlEdit();
   }
 
   function isUrgentTodo(todo: Todo) {
@@ -1465,10 +1578,13 @@ function playLevelUp() {
     return date.getTime();
   }
 
-  function agendaWeekDays(now = new Date(agendaWeekStartAt)) {
+  function agendaWeekDays(now = new Date()) {
+    const center = new Date(now);
+    center.setHours(0, 0, 0, 0);
+    center.setDate(center.getDate() + agendaCenterOffset);
     return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(now);
-      date.setDate(now.getDate() + index);
+      const date = new Date(center);
+      date.setDate(center.getDate() + (index - 3));
       const dateKey = localDateString(0, date);
       return {
         dateKey,
@@ -1499,16 +1615,16 @@ function playLevelUp() {
   }
 
   function shiftAgendaWeek(offsetDays: number) {
-    const date = new Date(startOfAgendaWeek(agendaWeekStartAt));
-    date.setDate(date.getDate() + offsetDays);
-    agendaWeekStartAt = date.getTime();
-    selectedAgendaDate = localDateString(0, date);
+    agendaCenterOffset += offsetDays;
+    const center = new Date();
+    center.setDate(center.getDate() + agendaCenterOffset);
+    selectedAgendaDate = localDateString(0, center);
     agendaWeekVersion += 1;
     agendaDatePickerOpen = false;
   }
 
   function jumpAgendaToday() {
-    agendaWeekStartAt = startOfAgendaWeek();
+    agendaCenterOffset = 0;
     selectedAgendaDate = localDateString(0);
     agendaWeekVersion += 1;
     agendaDatePickerOpen = false;
@@ -1517,9 +1633,11 @@ function playLevelUp() {
   function setAgendaDateFromPicker(dateKey: string) {
     if (!dateKey) return;
     selectedAgendaDate = dateKey;
-    agendaWeekStartAt = startOfAgendaWeek(
-      new Date(`${dateKey}T00:00:00`).getTime(),
-    );
+    const picked = new Date(`${dateKey}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    picked.setHours(0, 0, 0, 0);
+    agendaCenterOffset = Math.round((picked.getTime() - today.getTime()) / 86400000);
     agendaWeekVersion += 1;
     agendaDatePickerOpen = false;
   }
@@ -1643,6 +1761,18 @@ function playLevelUp() {
       target.isContentEditable
     );
   }
+function sortTodayTodos(todos: Todo[]): Todo[] {
+    const incomplete = todos.filter((t) => !t.completed);
+    const completed = todos
+        .filter((t) => t.completed)
+        .sort((a, b) => {
+            const aTime = a.completed_at ?? 0;
+            const bTime = b.completed_at ?? 0;
+            return bTime - aTime; // 倒序：完成晚的在上，完成早的在下
+        });
+    return [...incomplete, ...completed];
+}
+
 function sortTodosByDueTime() {
     const currentTodos = $todos.items;
     const sorted = [...currentTodos].sort((a, b) => {
@@ -1660,9 +1790,7 @@ function sortTodosByDueTime() {
 
 
 function getDateKey(offset) {
-    const date = new Date();
-    date.setDate(date.getDate() + offset);
-    return date.toISOString().split('T')[0];
+    return localDateString(offset);
 }
 
   function toggleBatchMode() {
@@ -2167,6 +2295,7 @@ async function deleteTodo(
 
 <svelte:window
   onpointerdown={markPanelInteraction}
+  onpointermove={handlePointerMove}
   onkeydown={handlePanelKeydown}
 />
 
@@ -2876,6 +3005,7 @@ async function deleteTodo(
                       onPin={pinTodo}
                       onPriority={priorityTodo}
                       onFocus={openFocusForTodo}
+                      onSetUrl={setTodoUrl}
                       onSchedule={scheduleTodo}
                       onSnooze={snoozeTodo}
                       groups={$todos.groups}
@@ -3102,7 +3232,7 @@ async function deleteTodo(
                 {$translator("calendar.nextWeek")}
             </button>
         </div>
-        {#key `${agendaWeekStartAt}-${agendaWeekVersion}`}
+        {#key `${agendaCenterOffset}-${agendaWeekVersion}`}
             <div class="agenda-week-strip">
                 {#each agendaWeekDays() as day (day.dateKey)}
                     <button
@@ -3180,6 +3310,7 @@ async function deleteTodo(
                         onPin={pinTodo}
                         onPriority={priorityTodo}
                         onFocus={openFocusForTodo}
+                      onSetUrl={setTodoUrl}
                         onSchedule={scheduleTodo}
                         onSnooze={snoozeTodo}
                         groups={$todos.groups}
@@ -3233,6 +3364,7 @@ async function deleteTodo(
                       onPin={pinTodo}
                       onPriority={priorityTodo}
                       onFocus={openFocusForTodo}
+                      onSetUrl={setTodoUrl}
                       onSchedule={scheduleTodo}
                       onSnooze={snoozeTodo}
                       groups={$todos.groups}
@@ -3261,8 +3393,8 @@ async function deleteTodo(
           {/if}
         </div>
       {:else}
-      {#each renderedTodos as todo (todo.id)}
-        {@const group = renderedTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+      {#each incompleteTodos as todo (todo.id)}
+        {@const group = incompleteTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
         {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
         <div
           class:selected={selectedTodoId === todo.id}
@@ -3277,6 +3409,7 @@ async function deleteTodo(
             onPin={pinTodo}
             onPriority={priorityTodo}
             onFocus={openFocusForTodo}
+            onSetUrl={setTodoUrl}
             onSchedule={scheduleTodo}
             onSnooze={snoozeTodo}
             groups={$todos.groups}
@@ -3299,6 +3432,59 @@ async function deleteTodo(
           />
         </div>
       {/each}
+
+      {#if completedTodos.length > 0}
+        <button
+          class="completed-section-divider"
+          type="button"
+          onclick={toggleCompletedSection}
+          aria-expanded={completedSectionOpen}
+        >
+          <span class="divider-arrow">{completedSectionOpen ? "▾" : "▸"}</span>
+          <span>已完成 ({completedTodos.length})</span>
+        </button>
+        {#if completedSectionOpen}
+          {#each completedTodos as todo (todo.id)}
+            {@const group = completedTodos.filter((item) => item.completed === todo.completed && item.pinned === todo.pinned)}
+            {@const groupIndex = group.findIndex((item) => item.id === todo.id)}
+            <div
+              class:selected={selectedTodoId === todo.id}
+              class="todo-row todo-row-completed"
+              animate:flip={{ duration: reorderAnimationDuration }}
+            >
+              <TodoItem
+                {todo}
+                onToggle={toggleTodo}
+                onEdit={editTodo}
+                onNote={noteTodo}
+                onPin={pinTodo}
+                onPriority={priorityTodo}
+                onFocus={openFocusForTodo}
+                onSetUrl={setTodoUrl}
+                onSchedule={scheduleTodo}
+                onSnooze={snoozeTodo}
+                groups={$todos.groups}
+                onGroupChange={moveTodoToGroup}
+                onDelete={deleteTodo}
+                onMove={moveTodo}
+                onDragStart={startDrag}
+                batchMode={batchMode}
+                batchSelected={batchSelectedIds.has(todo.id)}
+                onBatchSelect={toggleBatchTodo}
+                canMoveUp={groupIndex > 0}
+                canMoveDown={groupIndex < group.length - 1}
+                isDragging={draggedTodo?.id === todo.id}
+                isDragTarget={draggedTodo?.id === todo.id}
+                dragDisabled={batchMode || (reorderDisabled && !canDragTodoToGroup(todo))}
+                reorderDisabled={reorderDisabled}
+                editRequest={
+                  editRequestTodoId === todo.id ? editRequestSeq : 0
+                }
+              />
+            </div>
+          {/each}
+        {/if}
+      {/if}
       {/if}
     {/if}
   </section>
@@ -3444,6 +3630,31 @@ async function deleteTodo(
   </div>
 {/if}
 
+{#if urlEditTodo}
+  <div class="url-edit-backdrop">
+    <button class="url-edit-dismiss" type="button" aria-label="关闭" onclick={cancelUrlEdit}></button>
+    <div class="url-edit-card" role="dialog" aria-modal="true">
+      <h3>设置任务网址</h3>
+      <p class="url-edit-task">{urlEditTodo.title}</p>
+      <input
+        type="text"
+        class="url-edit-input"
+        placeholder="https://example.com"
+        bind:value={urlDraft}
+        onkeydown={(e) => {
+          if (e.key === "Enter") saveUrlEdit();
+          if (e.key === "Escape") cancelUrlEdit();
+        }}
+        autofocus
+      />
+      <div class="url-edit-actions">
+        <button type="button" class="url-edit-cancel" onclick={cancelUrlEdit}>取消</button>
+        <button type="button" class="url-edit-save" onclick={saveUrlEdit}>保存</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
     /* 新增的置顶按钮样式 */
     .pin-window-button {
@@ -3469,5 +3680,79 @@ async function deleteTodo(
 
     .pin-window-button.active {
         color: var(--accent-color, #f6c94c);
+    }
+    .url-edit-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+    }
+    .url-edit-dismiss {
+        position: absolute;
+        inset: 0;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+    }
+    .url-edit-card {
+        position: relative;
+        background: var(--bg-primary, #fff);
+        border-radius: 12px;
+        padding: 24px;
+        width: 360px;
+        max-width: 90vw;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+    .url-edit-card h3 {
+        margin: 0 0 8px 0;
+        font-size: 16px;
+        color: var(--text-primary, #333);
+    }
+    .url-edit-task {
+        margin: 0 0 16px 0;
+        font-size: 13px;
+        color: var(--text-secondary, #888);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .url-edit-input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--border-color, #ddd);
+        border-radius: 8px;
+        font-size: 14px;
+        box-sizing: border-box;
+        outline: none;
+        background: var(--bg-input, #f9f9f9);
+        color: var(--text-primary, #333);
+    }
+    .url-edit-input:focus {
+        border-color: #f6c94c;
+    }
+    .url-edit-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+    }
+    .url-edit-cancel, .url-edit-save {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        cursor: pointer;
+        border: none;
+    }
+    .url-edit-cancel {
+        background: var(--bg-secondary, #f0f0f0);
+        color: var(--text-secondary, #666);
+    }
+    .url-edit-save {
+        background: #f6c94c;
+        color: #3d3528;
+        font-weight: 600;
     }
 </style>

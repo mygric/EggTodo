@@ -41,7 +41,7 @@ impl Tray for LinuxTray {
     fn activate(&mut self, _x: i32, _y: i32) {
         // No tray rectangle is available here, so the panel falls back to the
         // screen corner, matching the tray menu's open action.
-        tray::toggle_panel(&self.app, None);
+        tray::toggle_panel(&self.app, None, false);
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -63,7 +63,7 @@ impl Tray for LinuxTray {
         let locale = self.snapshot.locale;
         let mut items = vec![
             action(locale.tray_toggle(), |tray| {
-                tray::toggle_panel(&tray.app, None);
+                tray::toggle_panel(&tray.app, None, false);
             }),
             action(locale.tray_new_task(), |tray| {
                 tray::show_panel(&tray.app, None);

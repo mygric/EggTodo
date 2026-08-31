@@ -48,6 +48,10 @@
   async function handlePointerDown(event: PointerEvent) {
     if (event.button !== 0) return;
 
+    // Prevent the browser's default image drag (the semi-transparent
+    // "ghost" drag preview). We handle dragging ourselves via setPointerCapture.
+    event.preventDefault();
+
     // --- Synchronous bookkeeping (before any await) ---
     pointerDownScreenX = event.screenX;
     pointerDownScreenY = event.screenY;
@@ -60,8 +64,11 @@
 
     // CRITICAL: capture pointer synchronously so pointermove keeps firing
     // even when the cursor leaves the element during a drag.
-    if (event.currentTarget instanceof Element) {
-      event.currentTarget.setPointerCapture(event.pointerId);
+    // Use event.target (the actual clicked child element) instead of
+    // currentTarget (the parent .flyout), because the parent has
+    // pointer-events: none and cannot capture pointer events.
+    if (event.target instanceof Element) {
+      try { event.target.setPointerCapture(event.pointerId); } catch (e) {}
     }
 
     // Suppress the main panel's blur-to-hide so that flyoutTogglePanel()
@@ -142,8 +149,23 @@
     if (!saved) return;
     try {
       const { x, y } = JSON.parse(saved) as { x: number; y: number };
-      if (typeof x === "number" && typeof y === "number") {
-        await getCurrentWindow().setPosition(new PhysicalPosition(x, y));
+      if (typeof x !== "number" || typeof y !== "number") return;
+
+      // 边界检查：确保悬浮球恢复位置在屏幕范围内，避免拖到屏幕外后找不到
+      const win = getCurrentWindow();
+      const monitors = await win.availableMonitors();
+      const monitor = monitors[0] ?? null;
+      if (monitor) {
+        const screen = monitor.size();
+        const winSize = await win.outerSize();
+        const margin = 10;
+        const maxX = screen.width as number - winSize.width as number - margin;
+        const maxY = screen.height as number - winSize.height as number - margin;
+        const safeX = Math.max(margin, Math.min(x, maxX));
+        const safeY = Math.max(margin, Math.min(y, maxY));
+        await win.setPosition(new PhysicalPosition(safeX, safeY));
+      } else {
+        await win.setPosition(new PhysicalPosition(x, y));
       }
     } catch (error) {
       console.error("[flyout] restorePosition failed:", error);
@@ -204,14 +226,18 @@
   onpointermove={handlePointerMove}
   onpointerup={handlePointerUp}
 >
-  <img src="/eggdone-icon.png" alt="EggDone" class="flyout-icon" />
+  <!-- 精确的圆形点击区域：只覆盖蛋仔实际内容，避免图片透明边距拦截鼠标 -->
+  <div class="hit-area"></div>
+  <img src="/eggdone-icon.png" alt="EggDone" class="flyout-icon" draggable="false" />
   {#if count > 0}
     <span class="count">{count}</span>
   {/if}
 </div>
 
 <style>
-  /* Reset default body margin so the 70x70 window has no dead space. */
+  /* Reset default body margin so the 70x70 window has no dead space.
+     Also set pointer-events: none on html/body so the entire WebView
+     surface is click-through; only .hit-area and .count re-enable it. */
   :global(html),
   :global(body) {
     margin: 0;
@@ -220,12 +246,14 @@
     height: 100%;
     overflow: hidden;
     background: transparent;
+    pointer-events: none;
   }
 
   .flyout {
     position: fixed;
-    top: 0;
-    left: 0;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     width: 70px;
     height: 70px;
     border-radius: 50%;
@@ -235,12 +263,28 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    overflow: visible;
     touch-action: none;
     transition: transform 0.15s ease;
+    /* 容器本身不响应鼠标事件，透明区域穿透到背后窗口；
+       只有 .hit-area 和 .count 设置 pointer-events: auto 才响应事件 */
+    pointer-events: none;
+  }
+  /* 精确的圆形点击区域：只覆盖蛋仔图标本身，往左偏移避免覆盖右侧透明区；
+     计数角标由 .count 单独响应点击 */
+  .hit-area {
+    position: absolute;
+    top: 50%;
+    left: 44%;
+    transform: translate(-50%, -50%);
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    pointer-events: auto;
+    cursor: grab;
   }
   .flyout:hover {
-    transform: scale(1.08);
+    transform: translate(-50%, -50%) scale(1.08);
   }
   .flyout:active {
     cursor: grabbing;
@@ -249,25 +293,29 @@
     width: 64px;
     height: 64px;
     object-fit: contain;
+    /* 图片本身不响应鼠标事件，由 .hit-area 负责 */
     pointer-events: none;
+    /* 禁止浏览器默认的图片拖拽预览 */
+    -webkit-user-drag: none;
   }
   .count {
     position: absolute;
-    right: 6px;
-    bottom: 18px;
+    right: 8px;
+    bottom: 17px;
     background: #f6c94c;
     border: 1px solid #000;
-    border-radius: 7px;
-    min-width: 18px;
-    height: 18px;
+    border-radius: 8px;
+    min-width: 20px;
+    height: 20px;
     box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
     color: #3d3528;
     padding: 0 4px;
-    pointer-events: none;
+    /* 角标区域也响应鼠标事件 */
+    pointer-events: auto;
   }
 </style>

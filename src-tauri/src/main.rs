@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    eggdone_lib::run()
+    eggtodo_lib::run()
 }

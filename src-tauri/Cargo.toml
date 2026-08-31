@@ -1,8 +1,8 @@
 [package]
-name = "eggdone"
-version = "1.1.0"
-description = "EggDone tray Todo application"
-authors = ["EggDone Contributors"]
+name = "eggtodo"
+version = "1.2.1"
+description = "EggTodo tray Todo application"
+authors = ["EggTodo Contributors"]
 edition = "2021"
 license = "MIT"
 
@@ -12,7 +12,7 @@ license = "MIT"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "eggdone_lib"
+name = "eggtodo_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -40,6 +40,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 tauri-winrt-notification = "0.7.2"
+windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Media_Audio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }

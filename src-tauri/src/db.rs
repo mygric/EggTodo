@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, Transaction};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 const DEVICE_ID_KEY: &str = "device_id";
 
 pub struct Database {
@@ -87,6 +87,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     
     apply_migration(connection, 14, add_notes)?;
     apply_migration(connection, 15, add_note_attachments)?;
+    apply_migration(connection, 16, add_todo_url)?;
 
     debug_assert_eq!(schema_version(connection)?, CURRENT_SCHEMA_VERSION);
     Ok(())
@@ -1220,3 +1221,14 @@ mod tests {
         assert_eq!(priority, 0);
     }
 }
+
+fn add_todo_url(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "
+        ALTER TABLE todos
+            ADD COLUMN url TEXT;
+        "
+,
+    )
+}
+

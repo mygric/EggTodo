@@ -1,4 +1,4 @@
-# EggDone v1.1.0 更新日志
+# EggDone v1.2.0 更新日志
 
 **发布日期：** 2026-08-28
 
@@ -52,9 +52,9 @@
 
 | 平台 | 下载 |
 |------|------|
-| Windows | [EggDone_1.1.0_x64-setup.exe](https://github.com/mygric/EggTodo/releases/download/v1.1.0/EggDone_1.1.0_x64-setup.exe) |
-| Windows (便携版) | [EggDone_1.1.0_x64-portable.exe](https://github.com/mygric/EggTodo/releases/download/v1.1.0/EggDone_1.1.0_x64-portable.exe) |
-| macOS | [EggDone_1.1.0_aarch64.dmg](https://github.com/mygric/EggTodo/releases/download/v1.1.0/EggDone_1.1.0_aarch64.dmg) |
-| Linux | [EggDone_1.1.0_amd64.deb](https://github.com/mygric/EggTodo/releases/download/v1.1.0/EggDone_1.1.0_amd64.deb) |
+| Windows | [EggDone_1.2.0_x64-setup.exe](https://github.com/mygric/EggTodo/releases/download/v1.2.0/EggDone_1.2.0_x64-setup.exe) |
+| Windows (便携版) | [EggDone_1.2.0_x64-portable.exe](https://github.com/mygric/EggTodo/releases/download/v1.2.0/EggDone_1.2.0_x64-portable.exe) |
+| macOS | [EggDone_1.2.0_aarch64.dmg](https://github.com/mygric/EggTodo/releases/download/v1.2.0/EggDone_1.2.0_aarch64.dmg) |
+| Linux | [EggDone_1.2.0_amd64.deb](https://github.com/mygric/EggTodo/releases/download/v1.2.0/EggDone_1.2.0_amd64.deb) |
 
 > 鸿蒙移动版请在[华为应用市场](https://appgallery.huawei.com/app/detail?id=com.eggdone.todo)搜索「蛋定 Todo」下载。

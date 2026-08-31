@@ -4,8 +4,10 @@
   
 // 在 TodoItem.svelte 的 <script> 中添加
 import { todos } from "$lib/stores/todoStore";
+import { playCompleteSound } from "$lib/utils/sound";
 
   import { languageState, translator } from "$lib/i18n";
+  import { todoApi } from "$lib/api/todoApi";
   import type { TodoScheduleInput } from "$lib/api/todoApi";
   import type {
     RepeatDeleteScope,
@@ -45,6 +47,7 @@ import { todos } from "$lib/stores/todoStore";
   export let onPin: (todo: Todo, pinned: boolean) => Promise<void>;
   export let onPriority: (todo: Todo, priority: number) => Promise<void>;
   export let onFocus: (todo: Todo) => void;
+  export let onSetUrl: (todo: Todo) => void;
   export let onSchedule: (
     id: number,
     schedule: TodoScheduleInput,
@@ -84,6 +87,10 @@ import { todos } from "$lib/stores/todoStore";
   let noteOpen = false;
   let noteDraft = "";
   let noteSaving = false;
+
+  function openUrl(url: string) {
+    todoApi.openUrl(url).catch((error) => console.error("打开网址失败:", error));
+  }
   let noteError = "";
   let customDate = "";
   let customDueTime = "18:00";
@@ -103,6 +110,21 @@ let anniversaryDay = 1;
 
  $: dueLabel = localizedDueLabel(todo);
 $: displayDueLabel = getDisplayDueLabel(todo);
+$: completedTimeLabel = (() => {
+    if (!todo.completed || todo.completed_at === null) return "";
+    const d = new Date(todo.completed_at);
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const isSameYear = d.getFullYear() === now.getFullYear();
+    const hours = String(d.getHours()).padStart(2, "0");
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    const time = `${hours}:${minutes}`;
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    if (isToday) return `今天 ${time}`;
+    if (isSameYear) return `${month}/${day} ${time}`;
+    return `${d.getFullYear()}/${month}/${day}`;
+})();
 
 
 function getDisplayDueLabel(todo: Todo) {
@@ -529,7 +551,13 @@ function repeatLabel(rule: RepeatRule | null) {
     class:checked={todo.completed}
     type="button"
     aria-label={todo.completed ? $translator("todo.markIncomplete") : $translator("todo.markCompleted")}
-    onclick={() => void onToggle(todo)}
+    onclick={() => {
+        // Play sound FIRST, before invoking the async toggle function.
+        // Calling an async function incurs a microtask delay; playing the
+        // sound synchronously here ensures it starts at click time.
+        playCompleteSound();
+        void onToggle(todo);
+    }}
     disabled={editing}
 >
     {#if todo.completed}
@@ -607,6 +635,11 @@ function repeatLabel(rule: RepeatRule | null) {
             >
               {dueTone === "overdue" ? `${$translator("todo.overdue")} ` : ""}{displayDueLabel}
             </button>
+          {/if}
+          {#if completedTimeLabel}
+            <span class="completed-time-badge" title="完成时间">
+              ✓ {completedTimeLabel}
+            </span>
           {/if}
           {#if todo.reminder_at !== null}
             <button
@@ -807,6 +840,28 @@ function repeatLabel(rule: RepeatRule | null) {
   {/if}
 
   <div class="item-actions">
+    {#if todo.url}
+      <button
+        class="url-button"
+        type="button"
+        title={todo.url}
+        onclick={(e) => {
+          e.stopPropagation();
+          openUrl(todo.url!);
+        }}
+        oncontextmenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSetUrl(todo);
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="2" y1="12" x2="22" y2="12" />
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </svg>
+      </button>
+    {/if}
     <button
       class:active={actionsOpen}
       class="more-button"
@@ -905,6 +960,16 @@ function repeatLabel(rule: RepeatRule | null) {
           }}
         >
           {$translator("todo.startFocus")}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onclick={() => {
+            actionsOpen = false;
+            onSetUrl(todo);
+          }}
+        >
+          {todo.url ? "修改网址" : "设置网址"}
         </button>
         <button
           type="button"

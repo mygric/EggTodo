@@ -18,7 +18,7 @@ use crate::{
 
 const RECENT_BLUR_DURATION: Duration = Duration::from_millis(350);
 const DIALOG_CLOSE_GRACE: Duration = Duration::from_millis(500);
-const INTERNAL_INTERACTION_GRACE: Duration = Duration::from_millis(300);
+const INTERNAL_INTERACTION_GRACE: Duration = Duration::from_millis(150);
 const TRAY_ID: &str = "eggdone-tray";
 const TODAY_TASK_MENU_LIMIT: usize = 3;
 const TODAY_TASK_MENU_TITLE_MAX_CHARS: usize = 18;
@@ -30,6 +30,26 @@ struct PanelStateInner {
     dialog_closed_at: Option<Instant>,
     dialog_active: bool,
     last_internal_interaction: Option<Instant>,
+    // Set by Moved/Resized events. While this timestamp is in the future,
+    // blur-to-hide is suppressed — this prevents the window from being hidden
+    // mid-drag (which causes the "flash and snap back" bug on Windows).
+    dragging_until: Option<Instant>,
+    // Authoritative panel visibility. We maintain this ourselves instead of
+    // relying on window.is_visible(), because on Windows a transparent window
+    // can get out of sync after resize/move gestures (the window may be
+    // forcibly shown by the drag loop after a blur-hide, leaving is_visible()
+    // returning the wrong value). None means "not yet initialised; sync from
+    // the window on first use".
+    panel_visible: Option<bool>,
+    // Whether the window has been placed at its initial default position.
+    // On first show we snap it to the bottom-right corner; after that we
+    // respect the user's chosen position.
+    position_initialized: bool,
+    // When set, the next toggle operation will force-show the panel regardless
+    // of the visibility state. Set after a blur-to-hide so the first user
+    // interaction after an auto-hide always reveals the window, even if the
+    // maintained/is_visible states are temporarily out of sync.
+    force_show_next: bool,
 }
 
 #[derive(Default)]
@@ -61,6 +81,85 @@ impl PanelState {
         }
     }
 
+    /// Clear the last internal interaction timestamp. Called after showing the
+    /// panel so that a blur immediately after show (e.g. user clicks elsewhere
+    /// right after opening) correctly triggers blur-to-hide instead of being
+    /// suppressed by the interaction grace window.
+    pub fn clear_internal_interaction(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.last_internal_interaction = None;
+        }
+    }
+
+    /// Mark that the window is being dragged or resized. Suppresses blur-to-hide
+    /// for 1 second after the last Moved/Resized event, preventing the window
+    /// from being hidden mid-drag (which causes the "flash and snap back" bug).
+    pub fn mark_dragging(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.dragging_until = Some(Instant::now() + Duration::from_secs(1));
+        }
+    }
+
+    /// Set the authoritative panel visibility. Call this whenever we show or
+    /// hide the main panel, so flyout_toggle_panel can make decisions without
+    /// querying the potentially-stale window.is_visible().
+    pub fn set_panel_visible(&self, visible: bool) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.panel_visible = Some(visible);
+        }
+    }
+
+    /// Get the authoritative panel visibility. On first call (state is None),
+    /// sync from the actual window visibility once. After that we trust our
+    /// own state exclusively.
+    pub fn get_panel_visible(&self, app: &AppHandle) -> bool {
+        if let Ok(mut inner) = self.inner.lock() {
+            if inner.panel_visible.is_none() {
+                let visible = app
+                    .get_webview_window("main")
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false);
+                inner.panel_visible = Some(visible);
+            }
+            inner.panel_visible.unwrap_or(false)
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if this is the first time the panel is being shown (position
+    /// not yet initialised). Atomically marks it as initialised so subsequent
+    /// calls return false.
+    pub fn consume_position_init(&self) -> bool {
+        if let Ok(mut inner) = self.inner.lock() {
+            if !inner.position_initialized {
+                inner.position_initialized = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mark that the next toggle should force-show the panel. Called after a
+    /// blur-to-hide so the first user interaction after an auto-hide reliably
+    /// reveals the window.
+    pub fn set_force_show_next(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.force_show_next = true;
+        }
+    }
+
+    /// Atomically consume the force-show-next flag. Returns true if it was set.
+    pub fn consume_force_show_next(&self) -> bool {
+        if let Ok(mut inner) = self.inner.lock() {
+            if inner.force_show_next {
+                inner.force_show_next = false;
+                return true;
+            }
+        }
+        false
+    }
+
     fn mark_tray_press(&self) {
         self.mark_tray_press_at(Instant::now());
     }
@@ -69,7 +168,7 @@ impl PanelState {
         self.consume_tray_blur_at(Instant::now())
     }
 
-    fn clear_toggle_history(&self) {
+    pub(crate) fn clear_toggle_history(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.last_blur_hide = None;
             inner.last_tray_press = None;
@@ -86,8 +185,9 @@ impl PanelState {
         let interaction_grace = inner.last_internal_interaction.is_some_and(|interaction| {
             duration_since(now, interaction) < INTERNAL_INTERACTION_GRACE
         });
+        let dragging = inner.dragging_until.is_some_and(|until| now < until);
 
-        if inner.dialog_active || dialog_grace || interaction_grace {
+        if inner.dialog_active || dialog_grace || interaction_grace || dragging {
             return false;
         }
 
@@ -199,7 +299,7 @@ fn create_tauri_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => {
-                toggle_panel(app, None);
+                toggle_panel(app, None, false);
             }
             "new" => {
                 show_panel(app, None);
@@ -232,7 +332,14 @@ fn create_tauri_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
             "quit" => app.exit(0),
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| match event {
+        .on_tray_icon_event(|tray, event| {
+            // Any tray click (left or right) takes focus away from the panel.
+            // Mark an internal interaction so the panel's blur-to-hide is
+            // suppressed while the user is interacting with the tray menu.
+            if let TrayIconEvent::Click { .. } = event {
+                tray.app_handle().state::<PanelState>().mark_internal_interaction();
+            }
+            match event {
             TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Down,
@@ -259,10 +366,11 @@ fn create_tauri_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
                         width: size.width,
                         height: size.height,
                     }),
+                    false,
                 );
             }
             _ => {}
-        })
+        }})
         .build(app)?;
     Ok(tray)
 }
@@ -702,21 +810,38 @@ pub(crate) fn toggle_flyout_window(app: &AppHandle) {
     }
 }
 
-pub(crate) fn toggle_panel(app: &AppHandle, anchor: Option<Rect>) -> bool {
+pub(crate) fn toggle_panel(app: &AppHandle, anchor: Option<Rect>, skip_tray_check: bool) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
-    let visible = window.is_visible().unwrap_or(false);
+    let panel_state = app.state::<PanelState>();
 
-    if visible {
-        app.state::<PanelState>().clear_toggle_history();
+    // If a blur-to-hide just happened, force-show on the next toggle regardless
+    // of the visibility state. This works around stale maintained/is_visible
+    // states after a programmatic hide on a transparent window.
+    if panel_state.consume_force_show_next() {
+        show_panel(app, anchor);
+        return true;
+    }
+
+    // Cross-check maintained state with actual window visibility. Only hide
+    // when BOTH sources agree the window is visible. After a blur-to-hide,
+    // either source can return a stale "true", so if either says "hidden"
+    // we show the window. This guarantees the first toggle after an auto-hide
+    // always reveals the window.
+    let maintained_visible = panel_state.get_panel_visible(app);
+    let actual_visible = window.is_visible().unwrap_or(false);
+
+    if maintained_visible && actual_visible {
+        panel_state.clear_toggle_history();
         let _ = window.hide();
+        panel_state.set_panel_visible(false);
         return false;
     }
 
-    // If this tray press caused the panel's blur, keep the interaction as a
-    // hide action. A later tray press after an unrelated blur should reopen it.
-    if app.state::<PanelState>().consume_tray_blur() {
+    // The tray-blur suppression only applies to tray icon clicks. Shortcuts and
+    // the flyout ball must always toggle the panel, so skip this check for them.
+    if !skip_tray_check && panel_state.consume_tray_blur() {
         return false;
     }
 
@@ -724,20 +849,58 @@ pub(crate) fn toggle_panel(app: &AppHandle, anchor: Option<Rect>) -> bool {
     true
 }
 
-pub(crate) fn show_panel(app: &AppHandle, anchor: Option<Rect>) {
+pub(crate) fn show_panel(app: &AppHandle, _anchor: Option<Rect>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     app.state::<PanelState>().clear_toggle_history();
 
-    if let Some(anchor) = anchor {
-        place_near_tray(&window, anchor);
-    } else {
-        place_at_screen_corner(&window);
+    // All invocations (tray icon, shortcut, flyout ball) now keep the user's
+    // last window position. We only snap to the bottom-right corner if the
+    // current position is off-screen or below the taskbar. The old
+    // place_near_tray() behavior (anchoring to the tray icon) was removed
+    // because it overwrote the user's saved position on every tray click.
+    if let (Ok(outer_pos), Ok(outer_size), Ok(Some(monitor))) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.primary_monitor(),
+    ) {
+        let work = monitor.work_area();
+        let win_right = outer_pos.x + outer_size.width as i32;
+        let win_bottom = outer_pos.y + outer_size.height as i32;
+        let work_right = work.position.x + work.size.width as i32;
+        let work_bottom = work.position.y + work.size.height as i32;
+
+        let off_screen = outer_pos.x < work.position.x
+            || outer_pos.y < work.position.y
+            || win_right > work_right
+            || win_bottom > work_bottom;
+
+        if off_screen {
+            let margin = 20;
+            let x = work_right - outer_size.width as i32 - margin;
+            let y = work_bottom - outer_size.height as i32 - margin;
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
     }
 
+    let _ = window.unminimize();
+
+    // Show and focus the window. We avoid toggling set_always_on_top here
+    // because repeatedly toggling the topmost style on a transparent window
+    // over many show/hide cycles can leave the window's extended styles in a
+    // stale state, causing subsequent show() calls to be no-ops.
     let _ = window.show();
     let _ = window.set_focus();
+
+    // Update authoritative visibility AFTER the window is actually shown.
+    let panel_state = app.state::<PanelState>();
+    panel_state.set_panel_visible(true);
+    // Mark an interaction so a blur immediately after show (e.g. shortcut key
+    // still held down, or the window losing focus during the show transition)
+    // doesn't trigger blur-to-hide. After the 500ms grace expires, a real
+    // user click elsewhere will correctly hide the panel.
+    panel_state.mark_internal_interaction();
 }
 
 fn place_near_tray(window: &tauri::WebviewWindow, anchor: Rect) {

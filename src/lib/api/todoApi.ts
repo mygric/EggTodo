@@ -104,6 +104,14 @@ export const todoApi = {
     return invoke<Todo>("set_todo_priority", { id, priority });
   },
 
+  setUrl(id: number, url: string | null): Promise<Todo> {
+    return invoke<Todo>("set_todo_url", { id, url });
+  },
+
+  openUrl(url: string): Promise<void> {
+    return invoke<void>("open_url", { url });
+  },
+
   setSchedule(
     id: number,
     schedule: TodoScheduleInput,
