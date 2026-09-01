@@ -178,6 +178,10 @@ export const todoApi = {
     return codedInvoke(invoke<void>("open_focus_window"), "FOCUS_UNAVAILABLE");
   },
 
+  hideFocusWindow(): Promise<void> {
+    return invoke<void>("hide_focus_window");
+  },
+
   publishFocusNotification(completedPhase: "focus" | "break"): Promise<void> {
     return codedInvoke(
       invoke<void>("publish_focus_notification", { completedPhase }),

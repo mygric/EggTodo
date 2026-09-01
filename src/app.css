@@ -2080,7 +2080,7 @@ footer {
 .todo-item p {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
@@ -2693,11 +2693,9 @@ body:has(.todo-item.dragging) * {
   gap: 1px;
 }
 
-/* 已完成任务：按钮靠上对齐，形成清晰的双排布局
-   第一排：标题 + 按钮；第二排：完成时间/截止时间/重复规则 */
+/* 已完成任务：按钮垂直居中 */
 .todo-item.completed .item-actions {
-  align-self: flex-start;
-  margin-top: -2px;
+  align-self: center;
 }
 
 /* 已完成任务：增加一点高度，避免内容拥挤 */
@@ -4314,11 +4312,13 @@ footer button {
 html[data-theme="dark"],
 html[data-theme="dark"] body {
   color: #eee7da;
-  background: #1d1b18;
+  background: transparent;
   color-scheme: dark;
 }
 
 html[data-theme="dark"] .panel-shell {
+  border-color: rgb(80 72 60 / 60%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%);
   background:
     radial-gradient(circle at 90% 5%, rgb(246 201 76 / 12%), transparent 34%),
     #1d1b18;

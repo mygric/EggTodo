@@ -1,6 +1,6 @@
 [package]
 name = "eggtodo"
-version = "1.2.1"
+version = "1.2.3"
 description = "EggTodo tray Todo application"
 authors = ["EggTodo Contributors"]
 edition = "2021"
@@ -36,6 +36,7 @@ url = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+opener = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }

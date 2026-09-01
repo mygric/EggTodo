@@ -1029,9 +1029,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &full_url])
-            .spawn()
+        opener::open(&full_url)
             .map_err(|e| format!("打开浏览器失败: {}", e))?;
     }
 
@@ -1183,12 +1181,21 @@ pub fn open_focus_window(app: AppHandle) -> Result<(), String> {
             "focus window is not initialized",
         ));
     };
-    window.show().map_err(|error| {
-        crate::error_codes::coded(crate::error_codes::FOCUS_UNAVAILABLE, error.to_string())
-    })?;
-    window.set_focus().map_err(|error| {
-        crate::error_codes::coded(crate::error_codes::FOCUS_UNAVAILABLE, error.to_string())
-    })
+    // 切换显示/隐藏状态
+    let is_visible = window.is_visible().unwrap_or(false);
+    if is_visible {
+        window.hide().map_err(|error| {
+            crate::error_codes::coded(crate::error_codes::FOCUS_UNAVAILABLE, error.to_string())
+        })?;
+    } else {
+        window.show().map_err(|error| {
+            crate::error_codes::coded(crate::error_codes::FOCUS_UNAVAILABLE, error.to_string())
+        })?;
+        window.set_focus().map_err(|error| {
+            crate::error_codes::coded(crate::error_codes::FOCUS_UNAVAILABLE, error.to_string())
+        })?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

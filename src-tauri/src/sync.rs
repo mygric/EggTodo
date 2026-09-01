@@ -375,9 +375,7 @@ pub(crate) fn validate_document(document: &SyncDocument) -> Result<(), String> {
         {
             return Err("同步文件包含无效到期日期".to_string());
         }
-        if todo.due_date.is_some() && todo.due_at.is_some() {
-            return Err("同步文件包含重复到期信息".to_string());
-        }
+        // 允许同时存在 due_date 和 due_at（旧版本数据可能同时设置），合并时优先使用 due_at
         if todo.repeat_rule.is_some() && todo.due_date.is_none() {
             return Err("同步文件包含缺少到期日期的重复任务".to_string());
         }
@@ -558,11 +556,8 @@ fn validate_repeat_fields(
     repeat_next_due_date: Option<&str>,
     source: &str,
 ) -> Result<(), String> {
-    if let Some(rule) = repeat_rule {
-        match rule {
-            "daily" | "weekly" | "monthly" | "weekdays" => {}
-            _ => return Err(format!("{source}包含无效重复规则")),
-        }
+    if let Some(_rule) = repeat_rule {
+        // ⭐ 允许所有重复规则格式，不再限制（兼容旧版本数据和自定义间隔）
         let Some(next_due_date) = repeat_next_due_date else {
             return Err(format!("{source}包含缺失的下次重复日期"));
         };

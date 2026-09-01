@@ -1,0 +1,321 @@
+﻿node.exe : $ svelte-kit sync && svelte-check --tsconfig ./tsconfig.json
+所在位置 C:\Program Files\nodejs\pnpm.ps1:16 字符: 5
++     & "$basedir/node$exe"  "$basedir/node_modules/corepack/dist/pnpm. ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ svelte-kit sy..../tsconfig.json:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+The following Vite config options will be overridden by SvelteKit:
+  - root
+Loading svelte-check in workspace: e:\eggtodo
+Getting Svelte diagnostics...
+
+e:\eggtodo\[32msrc\lib\components\Flyout.svelte[39m:280:5
+[33mWarn[39m: Unknown property: 'user-drag' (css)
+[36m    -webkit-user-drag: none;
+    [35muser-drag[36m: none;
+  }[39m
+
+e:\eggtodo\[32msrc\lib\components\Flyout.svelte[39m:156:33
+[31mError[39m: Property 'primaryMonitor' does not exist on type 'Window'. (ts)
+[36m      const win = getCurrentWindow();
+      const monitor = await win.[35mprimaryMonitor[36m();
+      if (monitor) {[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:126:20
+[31mError[39m: No overload matches this call.
+  Overload 1 of 4, '(value: string | number | Date): Date', gave the following error.
+    Argument of type 'number | null' is not assignable to parameter of type 'string | number | Date'.
+      Type 'null' is not assignable to type 'string | number | Date'.
+  Overload 2 of 4, '(value: string | number): Date', gave the following error.
+    Argument of type 'number | null' is not assignable to parameter of type 'string | number'.
+      Type 'null' is not assignable to type 'string | number'. (ts)
+[36m        ? new Date(todo.due_date + 'T00:00:00')
+        : new Date([35mtodo.due_at[36m);[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:268:9
+[31mError[39m: This comparison appears to be unintentional because the types 'RepeatRule' and '"custom_interval"' have no overlap. (ts)
+[36mif (date && repeatChoice !== "none") {
+    if ([35mrepeatChoice === "custom_interval"[36m) {
+        repeatRule = `${customIntervalUnit}_${customIntervalValue}`;[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:270:16
+[31mError[39m: This comparison appears to be unintentional because the types 'RepeatRule' and '"anniversary"' have no overlap. (ts)
+[36m        repeatRule = `${customIntervalUnit}_${customIntervalValue}`;
+    } else if ([35mrepeatChoice === "anniversary"[36m) {
+        repeatRule = `anniversary_${String(anniversaryMonth).padStart(2, '0')}_${String(anniversaryDay).padStart(2, '0')}`;[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:293:11
+[31mError[39m: Type 'string | null' is not assignable to type 'RepeatRule | null'.
+  Type 'string' is not assignable to type 'RepeatRule | null'. (ts)
+[36m          reminder_at: reminderAt,
+          [35mrepeat_rule[36m: repeatRule,
+        },[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:726:6
+[31mError[39m: This comparison appears to be unintentional because the types 'RepeatRule | "none"' and '"anniversary"' have no overlap. (ts)
+[36m
+{#if [35mrepeatChoice === 'anniversary'[36m}
+    <select bind:value={anniversaryMonth} disabled={scheduleSaving} style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoItem.svelte[39m:753:14
+[31mError[39m: This comparison appears to be unintentional because the types 'RepeatRule | "none"' and '"custom_interval"' have no overlap. (ts)
+[36m
+        {#if [35mrepeatChoice === 'custom_interval'[36m}
+            <input[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:363:44
+[31mError[39m: Property 'primaryMonitor' does not exist on type 'Window'. (ts)
+[36m          // 获取主显示器工作区（排除任务栏），用于边界检查和默认位置
+          const monitor = await mainWindow.[35mprimaryMonitor[36m();
+          let workArea: { x: number; y: number; width: number; height: number } | null = null;[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:1589:55
+[31mError[39m: Property 'webkitAudioContext' does not exist on type 'Window & typeof globalThis'. Did you mean 'AudioContext'? (ts)
+[36m    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.[35mwebkitAudioContext[36m)();
+        masterGain = audioCtx.createGain();[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:1630:22
+[31mError[39m: No overload matches this call.
+  Overload 1 of 2, '(destinationNode: AudioNode, output?: number | undefined, input?: number | undefined): AudioNode', gave the following error.
+    Argument of type 'GainNode | null' is not assignable to parameter of type 'AudioNode'.
+      Type 'null' is not assignable to type 'AudioNode'.
+  Overload 2 of 2, '(destinationParam: AudioParam, output?: number | undefined): void', gave the following error.
+    Argument of type 'GainNode | null' is not assignable to parameter of type 'AudioParam'.
+      Type 'null' is not assignable to type 'AudioParam'. (ts)
+[36m        osc.connect(gain);
+        gain.connect([35mmaster[36m);
+        osc.start(t);[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:1930:26
+[31mError[39m: Parameter 'todo' implicitly has an 'any' type. (ts)
+[36m    const sorted = [...currentTodos].sort((a, b) => {
+        const getTime = ([35mtodo[36m) => {
+            if (todo.due_at !== null) return todo.due_at;[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:1943:21
+[31mError[39m: Parameter 'offset' implicitly has an 'any' type. (ts)
+[36m
+function getDateKey([35moffset[36m) {
+    return localDateString(offset);[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3220:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3220:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3220:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3225:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3225:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3225:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(-1)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3255:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3255:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3255:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3260:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3260:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3260:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(0)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3290:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3290:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3290:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#e8dcc8';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3295:25
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        [35mevent[36m.currentTarget.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3295:25
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        [35mevent.currentTarget[36m.style.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3295:45
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    if (selectedAgendaDate !== getDateKey(1)) {
+                        event.currentTarget.[35mstyle[36m.backgroundColor = '#f4ecd9';
+                    }[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3322:41
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    }}
+                    onmouseenter={() => [35mevent[36m.currentTarget.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3322:41
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    }}
+                    onmouseenter={() => [35mevent.currentTarget[36m.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3322:61
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    }}
+                    onmouseenter={() => event.currentTarget.[35mstyle[36m.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3323:41
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => [35mevent[36m.currentTarget.style.backgroundColor = 'transparent'}
+                >[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3323:41
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => [35mevent.currentTarget[36m.style.backgroundColor = 'transparent'}
+                >[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3323:61
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                    onmouseenter={() => event.currentTarget.style.backgroundColor = '#f4ecd9'}
+                    onmouseleave={() => event.currentTarget.[35mstyle[36m.backgroundColor = 'transparent'}
+                >[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3336:37
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => [35mevent[36m.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3336:37
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => [35mevent.currentTarget[36m.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3336:57
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => event.currentTarget.[35mstyle[36m.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3337:37
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => [35mevent[36m.currentTarget.style.backgroundColor = 'transparent'}
+                style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3337:37
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => [35mevent.currentTarget[36m.style.backgroundColor = 'transparent'}
+                style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3337:57
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.[35mstyle[36m.backgroundColor = 'transparent'}
+                style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3360:37
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => [35mevent[36m.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3360:37
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => [35mevent.currentTarget[36m.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3360:57
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                onclick={() => agendaNavCollapsed = !agendaNavCollapsed}
+                onmouseenter={() => event.currentTarget.[35mstyle[36m.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.style.backgroundColor = 'transparent'}[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3361:37
+[31mError[39m: 'event' is possibly 'undefined'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => [35mevent[36m.currentTarget.style.backgroundColor = 'transparent'}
+                style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3361:37
+[31mError[39m: 'event.currentTarget' is possibly 'null'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => [35mevent.currentTarget[36m.style.backgroundColor = 'transparent'}
+                style="[39m
+
+e:\eggtodo\[32msrc\lib\components\TodoPanel.svelte[39m:3361:57
+[31mError[39m: Property 'style' does not exist on type 'EventTarget'. (ts)
+[36m                onmouseenter={() => event.currentTarget.style.backgroundColor = '#f0eadf'}
+                onmouseleave={() => event.currentTarget.[35mstyle[36m.backgroundColor = 'transparent'}
+                style="[39m
+
+====================================
+[31msvelte-check found 48 errors and 1 warning in 3 files
+[39m[ELIFECYCLE] Command failed with exit code 1.
